@@ -6,36 +6,15 @@ const SP_PLAYER_API = 'https://api.spotify.com/v1/me/player';
 
 export type SpotifyActionResult = 'ok' | 'unauthorized' | 'error';
 
-export async function refreshSpotifyAccessToken(creds: SpotifyCredentials): Promise<string | null> {
-  const clientId = creds.clientId.trim();
-  const clientSecret = creds.clientSecret.trim();
-  const refreshToken = creds.refreshToken.trim();
+export interface SpotifyTokenResponse {
+  accessToken: string;
+  rotatedRefreshToken?: string;
+}
 
-  if (!clientId || !clientSecret || !refreshToken) {
-    return null;
-  }
-
-  // Spotify Client ID and Secret are strictly ASCII hex strings; reject non-ASCII typos cleanly
-  if (/[^\x20-\x7E]/.test(clientId) || /[^\x20-\x7E]/.test(clientSecret)) {
-    return null;
-  }
-
-  const authString = encodeBasicAuth(clientId, clientSecret);
-  if (!authString) {
-    return null;
-  }
-
-  const bodyStr = `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`;
-
-  const fetchOptions: RequestInit = {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${authString}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: bodyStr,
-  };
-
+async function postSpotifyTokenRequest(fetchOptions: RequestInit): Promise<{
+  access_token?: string;
+  refresh_token?: string;
+} | null> {
   try {
     let response: Response;
     try {
@@ -48,11 +27,114 @@ export async function refreshSpotifyAccessToken(creds: SpotifyCredentials): Prom
       return null;
     }
 
-    const data = (await response.json()) as { access_token?: string };
-    return data.access_token ?? null;
+    return (await response.json()) as { access_token?: string; refresh_token?: string };
   } catch {
     return null;
   }
+}
+
+export async function exchangeSpotifyPkceCode(params: {
+  clientId: string;
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}): Promise<{ accessToken: string; refreshToken: string } | null> {
+  const clientId = params.clientId.trim();
+  if (!clientId || /[^\x20-\x7E]/.test(clientId)) {
+    return null;
+  }
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    grant_type: 'authorization_code',
+    code: params.code.trim(),
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
+
+  const data = await postSpotifyTokenRequest({
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  });
+
+  if (!data?.access_token || !data?.refresh_token) {
+    return null;
+  }
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+  };
+}
+
+export async function refreshSpotifyAccessToken(
+  creds: SpotifyCredentials
+): Promise<SpotifyTokenResponse | null> {
+  const clientId = creds.clientId.trim();
+  const clientSecret = creds.clientSecret.trim();
+  const refreshToken = creds.refreshToken.trim();
+
+  if (!clientId || !refreshToken) {
+    return null;
+  }
+
+  if (/[^\x20-\x7E]/.test(clientId) || (clientSecret && /[^\x20-\x7E]/.test(clientSecret))) {
+    return null;
+  }
+
+  // PKCE Refresh Mode (no Client Secret needed — Spotify public client flow)
+  if (!clientSecret) {
+    const pkceBody = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+    });
+
+    const data = await postSpotifyTokenRequest({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: pkceBody.toString(),
+    });
+
+    if (!data?.access_token) {
+      return null;
+    }
+
+    return {
+      accessToken: data.access_token,
+      rotatedRefreshToken: data.refresh_token,
+    };
+  }
+
+  // Classic Confidential Client Mode (Client ID + Client Secret)
+  const authString = encodeBasicAuth(clientId, clientSecret);
+  if (!authString) {
+    return null;
+  }
+
+  const bodyStr = `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`;
+  const data = await postSpotifyTokenRequest({
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${authString}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: bodyStr,
+  });
+
+  if (!data?.access_token) {
+    return null;
+  }
+
+  return {
+    accessToken: data.access_token,
+    rotatedRefreshToken: data.refresh_token,
+  };
 }
 
 export type SpotifyPollResult =
@@ -127,7 +209,11 @@ export async function fetchCurrentlyPlaying(accessToken: string): Promise<Spotif
   }
 }
 
-async function performPlayerAction(url: string, method: 'PUT' | 'POST', accessToken: string): Promise<SpotifyActionResult> {
+async function performPlayerAction(
+  url: string,
+  method: 'PUT' | 'POST',
+  accessToken: string
+): Promise<SpotifyActionResult> {
   try {
     const res = await fetch(url, {
       method,
@@ -163,4 +249,3 @@ export async function sendSpotifySeek(
   const safePos = Math.max(0, Math.round(positionMs));
   return performPlayerAction(`${SP_PLAYER_API}/seek?position_ms=${safePos}`, 'PUT', accessToken);
 }
-

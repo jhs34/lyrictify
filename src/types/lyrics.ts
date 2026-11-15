@@ -23,9 +23,16 @@ export interface UISettings {
   keepAwake: boolean;
   hideControls: boolean;
   ambientLight: boolean;
+  autoHideHud: boolean;
+  splitLayout: boolean;
 }
 
-export type BooleanSettingKey = 'keepAwake' | 'hideControls' | 'ambientLight';
+export type BooleanSettingKey =
+  | 'keepAwake'
+  | 'hideControls'
+  | 'ambientLight'
+  | 'autoHideHud'
+  | 'splitLayout';
 
 export type NumericSettingKey = Exclude<keyof UISettings, BooleanSettingKey>;
 
@@ -47,10 +54,31 @@ export interface LrcLibSongItem {
   plainLyrics?: string | null;
 }
 
+export interface LrcLibCandidate {
+  id: string;
+  trackName: string;
+  artistName: string;
+  albumName: string;
+  durationSec: number;
+  hasSynced: boolean;
+  hasPlain: boolean;
+  syncedLyrics: string | null;
+  plainLyrics: string | null;
+}
+
 export interface LyricsFetchResult {
   type: 'synced' | 'plain';
   text: string;
   sourceLabel: string;
+  selectedId?: string;
+  candidates: LrcLibCandidate[];
+}
+
+export interface InterludeState {
+  active: boolean;
+  afterLineIndex: number; // -1 when before line 0 (intro)
+  cyclePhase: number; // 0..1 repeating every INTERLUDE_CYCLE_MS
+  dotOpacities: [number, number, number];
 }
 
 export type ViewerStatus =
@@ -65,4 +93,3 @@ export type ViewerStatus =
 export type SettingsTab = 'display' | 'spotify';
 
 export type PresetId = 'standard' | 'stand' | 'focus';
-

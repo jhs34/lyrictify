@@ -1,4 +1,6 @@
 import {
+  InterludeState,
+  LrcLibCandidate,
   LrcLibSongItem,
   LyricLine,
   NumericSettingKey,
@@ -22,7 +24,9 @@ export const DEFAULT_UI_SETTINGS: UISettings = {
   uiScale: 1.0,
   keepAwake: false,
   hideControls: false,
-  ambientLight: false,
+  ambientLight: true,
+  autoHideHud: true,
+  splitLayout: true,
 };
 
 export interface RGBColor {
@@ -122,16 +126,72 @@ export const PREVIEW_LRC = `[00:00.000] 어두운 방 안에 첫 소절이 떠�
 [00:06.000] 가사 타이밍이 어긋날 때는
 [00:09.000] 싱크 버튼으로 0.1초씩 바로 맞출 수 있습니다
 [00:12.000] 슬라이더를 잡으면 모달 배경이 투명해지고
-[00:15.000] 글씨 크기와 주변 블러를 보면서 조절합니다
-[00:18.000] 조절하는 동안 주변 소절의 블러도 일시 해제됩니다
-[00:21.000] 잠시 후 짧은 호흡의 구간이 이어집니다
-[00:24.000] 하나
-[00:25.000] 둘
-[00:26.000] 셋
-[00:27.000] 넷
-[00:28.000] 다섯
-[00:31.000] 원하는 소절을 누르면 그 시점으로 바로 이동합니다
-[00:35.000] 잠시 후 처음 소절로 천천히 돌아갑니다`;
+[00:15.000] 잠시 간주 호흡 표시가 이어집니다
+[00:22.000] 간주가 끝나고 다음 소절이 자연스럽게 시작됩니다
+[00:25.000] 조절하는 동안 주변 소절의 블러도 일시 해제됩니다
+[00:27.500] 짧은 호흡의 구간이 이어집니다
+[00:29.500] 하나
+[00:30.500] 둘
+[00:31.500] 셋
+[00:32.500] 넷
+[00:33.500] 다섯
+[00:36.000] 원하는 소절을 누르면 그 시점으로 바로 이동합니다`;
+
+export const PREVIEW_ALT_SYNCED_LRC = `[00:00.000] 다른 버전의 싱크 가사를 직접 골라 적용한 화면입니다
+[00:04.000] 상단 가사 선택창에서 앨범과 길이를 비교할 수 있습니다
+[00:08.000] 와이드 모니터에서는 좌측 앨범 아트 분할 뷰도 어울립니다
+[00:12.000] 하단 진행 바를 끌어 원하는 구간으로 곧바로 건너뜁니다
+[00:20.000] 무조작 자동 숨김을 켜면 가사와 조명만 조용히 남습니다
+[00:28.000] 언제든 원래 가사 후보로 다시 전환할 수 있습니다`;
+
+export const PREVIEW_PLAIN_TEXT = `싱크 타임스탬프가 없는 일반 가사 예시입니다
+재생 중에는 설정된 자동 스크롤 속도로 천천히 흐릅니다
+마우스 휠이나 터치로 자유롭게 위아래를 살펴볼 수 있습니다
+상단 가사 선택 버튼에서 다시 싱크 가사로 바꿀 수 있습니다`;
+
+export const PREVIEW_CANDIDATES: LrcLibCandidate[] = [
+  {
+    id: 'preview-synced-default',
+    trackName: 'UI 미리보기 체험 (기본 싱크)',
+    artistName: '실시간 싱크 미리보기',
+    albumName: 'Lyrictify Studio Session',
+    durationSec: 45,
+    hasSynced: true,
+    hasPlain: true,
+    syncedLyrics: PREVIEW_LRC,
+    plainLyrics: PREVIEW_PLAIN_TEXT,
+  },
+  {
+    id: 'preview-synced-alt',
+    trackName: 'UI 미리보기 체험 (Acoustic Ver · Late Night Studio Session Remastered)',
+    artistName: '실시간 싱크 미리보기',
+    albumName: 'Lyrictify Live Session Deluxe Edition',
+    durationSec: 45,
+    hasSynced: true,
+    hasPlain: false,
+    syncedLyrics: PREVIEW_ALT_SYNCED_LRC,
+    plainLyrics: null,
+  },
+  {
+    id: 'preview-plain-only',
+    trackName: 'UI 미리보기 체험 (일반 텍스트)',
+    artistName: '실시간 싱크 미리보기',
+    albumName: 'Booklet Edition',
+    durationSec: 45,
+    hasSynced: false,
+    hasPlain: true,
+    syncedLyrics: null,
+    plainLyrics: PREVIEW_PLAIN_TEXT,
+  },
+];
+
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '00:00';
+  const totalSec = Math.floor(ms / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
 export function clampSettingValue(val: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(val)) return fallback;
@@ -180,7 +240,6 @@ export function extractDominantColorFromPixels(data: ArrayLike<number>): RGBColo
     const maxC = Math.max(r, g, b);
     const minC = Math.min(r, g, b);
 
-    // Skip near-black letterbox/shadows and near-white highlights when finding chroma
     if (maxC < 28 || minC > 235) continue;
 
     const delta = maxC - minC;
@@ -201,15 +260,14 @@ export function extractDominantColorFromPixels(data: ArrayLike<number>): RGBColo
   let g = totalWeight > 0 ? weightedG / totalWeight : fallbackG / opaqueCount;
   let b = totalWeight > 0 ? weightedB / totalWeight : fallbackB / opaqueCount;
 
-  // Normalize peak brightness into a balanced ambient glow range (145..220)
   const peak = Math.max(r, g, b, 1);
-  if (peak < 145) {
-    const boost = 145 / peak;
+  if (peak < 175) {
+    const boost = 175 / peak;
     r *= boost;
     g *= boost;
     b *= boost;
-  } else if (peak > 220) {
-    const scale = 220 / peak;
+  } else if (peak > 245) {
+    const scale = 245 / peak;
     r *= scale;
     g *= scale;
     b *= scale;
@@ -223,11 +281,17 @@ export function extractDominantColorFromPixels(data: ArrayLike<number>): RGBColo
 }
 
 export function deriveSecondaryAmbientColor(primary: RGBColor): RGBColor {
-  // Subtle warm-cool harmonic shift for dual-lobe breathing depth
+  // Shift channels noticeably so secondary ambient lobe creates visible multi-tonal movement
+  const rawR = primary.r * 0.45 + primary.b * 0.55;
+  const rawG = primary.g * 0.52 + primary.r * 0.48;
+  const rawB = primary.b * 0.48 + primary.g * 0.52;
+  const peak = Math.max(rawR, rawG, rawB, 1);
+  const boost = peak < 185 ? 185 / peak : 1;
+
   return {
-    r: Math.round(primary.r * 0.72 + primary.b * 0.28),
-    g: Math.round(primary.g * 0.78 + primary.r * 0.22),
-    b: Math.round(primary.b * 0.75 + primary.g * 0.25),
+    r: Math.round(Math.min(255, Math.max(0, rawR * boost))),
+    g: Math.round(Math.min(255, Math.max(0, rawG * boost))),
+    b: Math.round(Math.min(255, Math.max(0, rawB * boost))),
   };
 }
 
@@ -260,6 +324,85 @@ export function computeTrackProgressMs(
   return ((raw % PREVIEW_DURATION_MS) + PREVIEW_DURATION_MS) % PREVIEW_DURATION_MS;
 }
 
+export const INTERLUDE_CYCLE_MS = 1800;
+export const INTERLUDE_HOLD_AFTER_VOCAL_MS = 1600;
+export const INTERLUDE_EXIT_LEAD_MS = 500;
+
+export function computeInterludeState(
+  lyrics: LyricLine[],
+  activeIndex: number,
+  estimatedProgressMs: number,
+  isPlainLyrics: boolean
+): InterludeState {
+  const inactive: InterludeState = {
+    active: false,
+    afterLineIndex: -1,
+    cyclePhase: 0,
+    dotOpacities: [0.26, 0.26, 0.26],
+  };
+
+  if (isPlainLyrics || lyrics.length === 0) {
+    return inactive;
+  }
+
+  let gapStartMs = -1;
+  let gapEndMs = -1;
+  let afterLineIndex = -1;
+
+  if (activeIndex === -1) {
+    const firstTime = lyrics[0].time;
+    const effectiveEnd = firstTime - INTERLUDE_EXIT_LEAD_MS;
+    if (firstTime >= 4000 && estimatedProgressMs >= 0 && estimatedProgressMs < effectiveEnd) {
+      gapStartMs = 0;
+      gapEndMs = effectiveEnd;
+      afterLineIndex = -1;
+    }
+  } else if (activeIndex >= 0 && activeIndex < lyrics.length - 1) {
+    const curTime = lyrics[activeIndex].time;
+    const nextTime = lyrics[activeIndex + 1].time;
+    const gapDuration = nextTime - curTime;
+    const effectiveStart = curTime + INTERLUDE_HOLD_AFTER_VOCAL_MS;
+    const effectiveEnd = nextTime - INTERLUDE_EXIT_LEAD_MS;
+
+    if (
+      gapDuration >= 6000 &&
+      estimatedProgressMs >= effectiveStart &&
+      estimatedProgressMs < effectiveEnd
+    ) {
+      gapStartMs = effectiveStart;
+      gapEndMs = effectiveEnd;
+      afterLineIndex = activeIndex;
+    }
+  }
+
+  if (gapStartMs < 0 || gapEndMs <= gapStartMs) {
+    return inactive;
+  }
+
+  // Repeat every INTERLUDE_CYCLE_MS (1.8s) regardless of whether the interlude is 6s or 30s
+  const elapsedInInterlude = Math.max(0, estimatedProgressMs - gapStartMs);
+  const cyclePhase = (elapsedInInterlude % INTERLUDE_CYCLE_MS) / INTERLUDE_CYCLE_MS;
+
+  const computeWaveOpacity = (dotOffset: number): number => {
+    const shifted = (cyclePhase - dotOffset + 1) % 1;
+    // Smooth raised-cosine wave peaking at shifted = 0.35 over a 0.70 active window
+    if (shifted > 0.7) return 0.26;
+    const wave = 0.5 - 0.5 * Math.cos((shifted / 0.7) * Math.PI * 2);
+    return Math.round((0.26 + wave * 0.7) * 100) / 100;
+  };
+
+  return {
+    active: true,
+    afterLineIndex,
+    cyclePhase: Math.round(cyclePhase * 1000) / 1000,
+    dotOpacities: [
+      computeWaveOpacity(0),
+      computeWaveOpacity(260 / INTERLUDE_CYCLE_MS),
+      computeWaveOpacity(520 / INTERLUDE_CYCLE_MS),
+    ],
+  };
+}
+
 export function encodeBasicAuth(clientId: string, clientSecret: string): string | null {
   try {
     const raw = `${clientId}:${clientSecret}`;
@@ -280,7 +423,6 @@ export function parsePastedCredentials(rawText: string): Partial<SpotifyCredenti
     return null;
   }
 
-  // 1. Try JSON object format
   if (trimmed.startsWith('{')) {
     try {
       const obj = JSON.parse(trimmed) as Record<string, unknown>;
@@ -295,11 +437,10 @@ export function parsePastedCredentials(rawText: string): Partial<SpotifyCredenti
       if (typeof rtok === 'string' && rtok.trim()) extracted.refreshToken = rtok.trim();
       if (Object.keys(extracted).length > 0) return extracted;
     } catch {
-      // Fall through to line-by-line key=value / key:value parsing
+      // Fall through
     }
   }
 
-  // 2. Try .env or key:value / key=value lines
   const lines = trimmed
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -322,7 +463,6 @@ export function parsePastedCredentials(rawText: string): Partial<SpotifyCredenti
     return extracted;
   }
 
-  // 3. Fallback: exactly 3 plain non-empty lines (clientId, clientSecret, refreshToken)
   if (lines.length === 3 && lines.every((l) => !l.includes(' '))) {
     return {
       clientId: lines[0],
@@ -401,12 +541,46 @@ export function buildSearchQueries(title: string, artist: string): { firstArtist
   };
 }
 
+export function normalizeLrcLibCandidates(items: LrcLibSongItem[]): LrcLibCandidate[] {
+  if (!Array.isArray(items)) return [];
+
+  const seen = new Set<string>();
+  const result: LrcLibCandidate[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const synced = item.syncedLyrics && item.syncedLyrics.trim().length > 0 ? item.syncedLyrics : null;
+    const plain = item.plainLyrics && item.plainLyrics.trim().length > 0 ? item.plainLyrics : null;
+    if (!synced && !plain) continue;
+
+    const id = item.id !== undefined ? `lrclib-${item.id}` : `lrclib-idx-${i}-${item.trackName ?? ''}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    result.push({
+      id,
+      trackName: item.trackName?.trim() || '제목 없음',
+      artistName: item.artistName?.trim() || 'Unknown Artist',
+      albumName: item.albumName?.trim() || '',
+      durationSec: typeof item.duration === 'number' ? Math.round(item.duration) : 0,
+      hasSynced: Boolean(synced),
+      hasPlain: Boolean(plain),
+      syncedLyrics: synced,
+      plainLyrics: plain,
+    });
+  }
+
+  // Sort synced candidates ahead of plain-only candidates
+  result.sort((a, b) => Number(b.hasSynced) - Number(a.hasSynced));
+  return result;
+}
+
 export function selectBestLyricsFromCandidates(
   songs: LrcLibSongItem[],
   queryStr: string,
   targetArtist: string,
   targetDurationSec: number
-): { type: 'synced' | 'plain'; text: string } | null {
+): { type: 'synced' | 'plain'; text: string; selectedId?: string } | null {
   if (!Array.isArray(songs) || songs.length === 0) return null;
 
   const expectedArtist = normalizeMatchToken(targetArtist);
@@ -432,12 +606,20 @@ export function selectBestLyricsFromCandidates(
 
   const synced = validSongs.find((song) => song.syncedLyrics && song.syncedLyrics.trim().length > 0);
   if (synced && synced.syncedLyrics) {
-    return { type: 'synced', text: synced.syncedLyrics };
+    return {
+      type: 'synced',
+      text: synced.syncedLyrics,
+      selectedId: synced.id !== undefined ? `lrclib-${synced.id}` : undefined,
+    };
   }
 
   const plain = validSongs.find((song) => song.plainLyrics && song.plainLyrics.trim().length > 0);
   if (plain && plain.plainLyrics) {
-    return { type: 'plain', text: plain.plainLyrics };
+    return {
+      type: 'plain',
+      text: plain.plainLyrics,
+      selectedId: plain.id !== undefined ? `lrclib-${plain.id}` : undefined,
+    };
   }
 
   return null;

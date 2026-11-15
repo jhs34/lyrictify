@@ -17,6 +17,14 @@ export function safeSetItem(key: string, value: string): void {
   }
 }
 
+export function safeRemoveItem(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Storage restricted
+  }
+}
+
 const STORAGE_KEY_MAP: Record<NumericSettingKey, string> = {
   syncOffset: 'sp_sync-offset',
   fontSize: 'sp_font-size',
@@ -28,6 +36,14 @@ const STORAGE_KEY_MAP: Record<NumericSettingKey, string> = {
   lineHeight: 'sp_line-height',
   margin: 'sp_margin',
   uiScale: 'sp_ui-scale',
+};
+
+const BOOLEAN_STORAGE_KEY_MAP: Record<BooleanSettingKey, string> = {
+  keepAwake: 'sp_keep_awake',
+  hideControls: 'sp_hide_controls',
+  ambientLight: 'sp_ambient_light_v2',
+  autoHideHud: 'sp_auto_hide_hud_v2',
+  splitLayout: 'sp_split_layout_v2',
 };
 
 export function loadStoredCredentials(): SpotifyCredentials {
@@ -45,12 +61,63 @@ export function saveStoredCredentials(creds: SpotifyCredentials): void {
 }
 
 export function clearStoredCredentials(): void {
+  safeRemoveItem('sp_client_id');
+  safeRemoveItem('sp_client_secret');
+  safeRemoveItem('sp_refresh_token');
+}
+
+export interface StoredPkceSession {
+  clientId: string;
+  codeVerifier: string;
+  state: string;
+  redirectUri: string;
+}
+
+export function savePkceSession(session: StoredPkceSession): void {
+  safeSetItem('sp_pkce_session', JSON.stringify(session));
+}
+
+export function loadPkceSession(): StoredPkceSession | null {
+  const raw = safeGetItem('sp_pkce_session');
+  if (!raw) return null;
   try {
-    window.localStorage.removeItem('sp_client_id');
-    window.localStorage.removeItem('sp_client_secret');
-    window.localStorage.removeItem('sp_refresh_token');
+    const parsed = JSON.parse(raw) as Partial<StoredPkceSession>;
+    if (parsed.clientId && parsed.codeVerifier && parsed.state && parsed.redirectUri) {
+      return {
+        clientId: parsed.clientId,
+        codeVerifier: parsed.codeVerifier,
+        state: parsed.state,
+        redirectUri: parsed.redirectUri,
+      };
+    }
+    return null;
   } catch {
-    // Storage restricted
+    return null;
+  }
+}
+
+export function clearPkceSession(): void {
+  safeRemoveItem('sp_pkce_session');
+  safeRemoveItem('sp_pkce_pending_callback');
+}
+
+export function consumePendingPkceCallback(): {
+  code: string;
+  state: string;
+  error: string;
+} | null {
+  const raw = safeGetItem('sp_pkce_pending_callback');
+  if (!raw) return null;
+  safeRemoveItem('sp_pkce_pending_callback');
+  try {
+    const parsed = JSON.parse(raw) as { code?: string; state?: string; error?: string };
+    return {
+      code: parsed.code ?? '',
+      state: parsed.state ?? '',
+      error: parsed.error ?? '',
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -66,23 +133,24 @@ export function loadStoredUISettings(): UISettings {
     {} as Record<NumericSettingKey, number>
   );
 
+  const booleanEntries = (Object.keys(BOOLEAN_STORAGE_KEY_MAP) as BooleanSettingKey[]).reduce(
+    (acc, key) => {
+      const raw = safeGetItem(BOOLEAN_STORAGE_KEY_MAP[key]);
+      acc[key] = raw !== null ? raw === 'true' : DEFAULT_UI_SETTINGS[key];
+      return acc;
+    },
+    {} as Record<BooleanSettingKey, boolean>
+  );
+
   return {
     ...numericEntries,
-    keepAwake: safeGetItem('sp_keep_awake') === 'true',
-    hideControls: safeGetItem('sp_hide_controls') === 'true',
-    ambientLight: safeGetItem('sp_ambient_light') === 'true',
+    ...booleanEntries,
   };
 }
 
 export function saveNumericSetting(key: NumericSettingKey, value: number): void {
   safeSetItem(STORAGE_KEY_MAP[key], String(value));
 }
-
-const BOOLEAN_STORAGE_KEY_MAP: Record<BooleanSettingKey, string> = {
-  keepAwake: 'sp_keep_awake',
-  hideControls: 'sp_hide_controls',
-  ambientLight: 'sp_ambient_light',
-};
 
 export function saveBooleanSetting(key: BooleanSettingKey, value: boolean): void {
   safeSetItem(BOOLEAN_STORAGE_KEY_MAP[key], String(value));

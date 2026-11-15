@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   AlertCircle,
+  Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Eye,
   EyeOff,
   RotateCcw,
@@ -26,17 +28,20 @@ import {
   detectActivePreset,
   parsePastedCredentials,
 } from '../utils/lyrics';
+import { getSpotifyRedirectUri } from '../utils/pkce';
 
 interface SettingsModalProps {
   isOpen: boolean;
   initialTab: SettingsTab;
   viewerStatus: ViewerStatus;
   isPreviewMode: boolean;
+  isPkceAuthorizing: boolean;
   credentials: SpotifyCredentials;
   settings: UISettings;
   isTransparentDrag: boolean;
   validationError: string | null;
   onClose: () => void;
+  onStartPkceConnect: (clientId: string) => void;
   onSaveAndConnect: (creds: SpotifyCredentials) => void;
   onDisconnectSpotify: () => void;
   onStartPreview: () => void;
@@ -66,8 +71,10 @@ const ADVANCED_SLIDERS: NumericSettingKey[] = [
 
 const BOOLEAN_SWITCHES: Array<{ key: BooleanSettingKey; label: string }> = [
   { key: 'ambientLight', label: '앰비언트 라이트' },
+  { key: 'splitLayout', label: '와이드 분할 뷰' },
+  { key: 'autoHideHud', label: 'UI 자동 숨김' },
   { key: 'keepAwake', label: '화면 꺼짐 방지' },
-  { key: 'hideControls', label: '재생 컨트롤러 숨기기' },
+  { key: 'hideControls', label: '컨트롤러 숨기기' },
 ];
 
 const SYNC_STEPS: Array<{ label: string; deltaMs: number | 'reset' }> = [
@@ -257,12 +264,12 @@ function BooleanSettingRow({
   const inputId = `input-${settingKey}`;
 
   return (
-    <div className="flex items-center justify-between h-9">
+    <div className="flex items-center justify-between h-8">
       <span
         id={labelId}
         onDoubleClick={() => onResetSingle(settingKey)}
         title={`더블클릭하여 기본값(${defaultVal ? '켜짐' : '꺼짐'})으로 복원`}
-        className={`text-sm select-none cursor-pointer inline-flex items-center gap-1.5 transition-colors duration-150 ${
+        className={`text-[13px] select-none cursor-pointer inline-flex items-center gap-1.5 transition-colors duration-150 ${
           isModified ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
         }`}
       >
@@ -281,7 +288,7 @@ function BooleanSettingRow({
           onChange={(e) => onToggle(settingKey, e.target.checked)}
           className="sr-only peer"
         />
-        <div className="w-10 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-5" />
+        <div className="w-9 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-4" />
       </label>
     </div>
   );
@@ -292,11 +299,13 @@ export function SettingsModal({
   initialTab,
   viewerStatus,
   isPreviewMode,
+  isPkceAuthorizing,
   credentials,
   settings,
   isTransparentDrag,
   validationError,
   onClose,
+  onStartPkceConnect,
   onSaveAndConnect,
   onDisconnectSpotify,
   onStartPreview,
@@ -315,16 +324,23 @@ export function SettingsModal({
   const [clientSecret, setClientSecret] = useState(credentials.clientSecret);
   const [refreshToken, setRefreshToken] = useState(credentials.refreshToken);
 
+  const [showManualTokens, setShowManualTokens] = useState<boolean>(() =>
+    Boolean(credentials.clientSecret)
+  );
   const [showSecret, setShowSecret] = useState(false);
   const [showRefreshToken, setShowRefreshToken] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const [copiedUri, setCopiedUri] = useState(false);
+
+  const redirectUri = getSpotifyRedirectUri();
 
   useLayoutEffect(() => {
     if (isOpen) {
       setActiveTab(initialTab);
       setPasteNotice(null);
+      setCopiedUri(false);
     }
   }, [isOpen, initialTab]);
 
@@ -332,6 +348,9 @@ export function SettingsModal({
     setClientId(credentials.clientId);
     setClientSecret(credentials.clientSecret);
     setRefreshToken(credentials.refreshToken);
+    if (credentials.clientSecret) {
+      setShowManualTokens(true);
+    }
   }, [credentials, isOpen]);
 
   useEffect(() => {
@@ -374,7 +393,7 @@ export function SettingsModal({
       viewerStatus === 'searching_lyrics' ||
       viewerStatus === 'lyrics_not_found' ||
       viewerStatus === 'spotify_idle');
-  const isSpotifyConnecting = viewerStatus === 'connecting';
+  const isSpotifyConnecting = viewerStatus === 'connecting' || isPkceAuthorizing;
   const hasSavedCreds = Boolean(
     credentials.clientId || credentials.clientSecret || credentials.refreshToken
   );
@@ -389,13 +408,29 @@ export function SettingsModal({
 
     e.preventDefault();
     if (parsed.clientId) setClientId(parsed.clientId);
-    if (parsed.clientSecret) setClientSecret(parsed.clientSecret);
-    if (parsed.refreshToken) setRefreshToken(parsed.refreshToken);
+    if (parsed.clientSecret) {
+      setClientSecret(parsed.clientSecret);
+      setShowManualTokens(true);
+    }
+    if (parsed.refreshToken) {
+      setRefreshToken(parsed.refreshToken);
+      setShowManualTokens(true);
+    }
     if (validationError) onClearValidationError();
     setPasteNotice('클립보드에서 인증 항목을 자동으로 채웠습니다');
   };
 
-  const handleSpotifySubmit = (e: React.FormEvent) => {
+  const handleCopyRedirectUri = async () => {
+    try {
+      await navigator.clipboard.writeText(redirectUri);
+      setCopiedUri(true);
+      window.setTimeout(() => setCopiedUri(false), 1600);
+    } catch {
+      // Clipboard restricted fallback
+    }
+  };
+
+  const handleManualSpotifySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPasteNotice(null);
     onSaveAndConnect({
@@ -415,7 +450,7 @@ export function SettingsModal({
   };
 
   const connectionLabel = isSpotifyConnecting
-    ? 'Spotify 연결 중'
+    ? 'Spotify 인증 중'
     : isSpotifyConnected
       ? 'Spotify 연결됨'
       : viewerStatus === 'auth_error'
@@ -445,7 +480,7 @@ export function SettingsModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
-        className={`surface-modal w-full max-w-[460px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
+        className={`surface-modal w-full max-w-[476px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
           isTransparentDrag ? 'transparent-mode' : ''
         }`}
       >
@@ -453,7 +488,7 @@ export function SettingsModal({
           설정
         </h2>
 
-        {/* Pinned Segmented Tab Header: 56px height */}
+        {/* Pinned Segmented Tab Header */}
         <div
           className={`flex items-center justify-between px-5 h-14 shrink-0 hide-on-drag border-b transition-colors duration-200 ${
             isTransparentDrag ? 'border-transparent' : 'border-[var(--border-hairline)]'
@@ -612,10 +647,6 @@ export function SettingsModal({
                     );
                   })}
                 </div>
-
-                <p className="text-[11px] text-[var(--text-muted)] leading-4">
-                  가사가 늦게 나오면 +, 너무 일찍 나오면 - (단축키 [ · ] 지원)
-                </p>
               </section>
 
               {/* 3. Core Live-Preview Sliders */}
@@ -637,9 +668,9 @@ export function SettingsModal({
                 ))}
               </section>
 
-              {/* 4. Core Switches (Ambient Light, Keep Awake, Hide Controls) */}
+              {/* 4. Compact 2-Column Switches (Ambient Light, Split View, Auto-Hide HUD, Keep Awake, Hide Controls) */}
               <section
-                className="pt-3 border-t border-[var(--border-hairline)] space-y-0.5 hide-on-drag"
+                className="pt-3 border-t border-[var(--border-hairline)] grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5 hide-on-drag"
                 aria-label="배경 조명 및 화면 표시"
               >
                 {BOOLEAN_SWITCHES.map((item) => (
@@ -691,7 +722,6 @@ export function SettingsModal({
               </section>
             </div>
 
-            {/* Pinned Display Footer */}
             <div
               className={`px-5 py-3.5 border-t shrink-0 flex items-center justify-between gap-2 hide-on-drag transition-colors duration-200 ${
                 isTransparentDrag
@@ -718,15 +748,15 @@ export function SettingsModal({
             </div>
           </div>
         ) : (
-          /* TAB 2: Spotify 연결 */
+          /* TAB 2: Spotify 연결 (PKCE 원클릭 + 수동 입력 겸용) */
           <form
             id="panel-spotify"
             role="tabpanel"
             aria-labelledby="tab-spotify"
-            onSubmit={handleSpotifySubmit}
+            onSubmit={handleManualSpotifySubmit}
             className="flex flex-col flex-1 min-h-0"
           >
-            <div className="px-5 py-5 space-y-4 flex-1 overflow-y-auto">
+            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
                   <span aria-hidden="true" className={`w-2 h-2 rounded-[2px] ${statusDotClass}`} />
@@ -739,7 +769,7 @@ export function SettingsModal({
                   onClick={() => setShowGuide((prev) => !prev)}
                   className="h-8 px-3 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-hairline)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1.5 active:scale-[0.97] transition-[color,transform] duration-150 cursor-pointer whitespace-nowrap"
                 >
-                  <span>토큰 발급 안내</span>
+                  <span>연결 안내</span>
                   {showGuide ? (
                     <ChevronUp size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
                   ) : (
@@ -749,29 +779,13 @@ export function SettingsModal({
               </div>
 
               {showGuide && (
-                <div className="rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)] p-3 text-xs text-[var(--text-secondary)] space-y-2 leading-5">
-                  <p className="font-medium text-[var(--text-primary)]">Spotify API 연동 순서</p>
-                  <p>
-                    1. Spotify Developer Dashboard에서 앱을 만든 뒤 Client ID와 Client Secret 확인
+                <div className="rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)] p-3 text-xs text-[var(--text-secondary)] space-y-1.5 leading-5">
+                  <p className="font-medium text-[var(--text-primary)]">
+                    Spotify PKCE 원클릭 연결 순서
                   </p>
-                  <p>
-                    2. 권한 스코프{' '}
-                    <code className="font-mono-tech text-[var(--text-primary)]">
-                      user-read-currently-playing
-                    </code>
-                    ,{' '}
-                    <code className="font-mono-tech text-[var(--text-primary)]">
-                      user-read-playback-state
-                    </code>
-                    ,{' '}
-                    <code className="font-mono-tech text-[var(--text-primary)]">
-                      user-modify-playback-state
-                    </code>
-                    로 Refresh Token 발급
-                  </p>
-                  <p className="text-[var(--text-muted)]">
-                    JSON이나 .env 형식을 복사해 입력칸에 붙여넣으면 세 항목이 한 번에 채워집니다
-                  </p>
+                  <p>1. Spotify Developer Dashboard에서 앱 생성 후 Client ID 복사</p>
+                  <p>2. 앱 설정의 Redirect URIs에 아래 주소를 추가하고 저장</p>
+                  <p>3. Client ID 입력 후 ‘Spotify로 원클릭 연결’을 누르면 토큰이 자동 발급됩니다</p>
                 </div>
               )}
 
@@ -783,7 +797,7 @@ export function SettingsModal({
                   <AlertCircle size={16} strokeWidth={1.5} className="text-[#e5484d] shrink-0" />
                   <span>
                     {validationError ??
-                      'Spotify 인증에 실패했습니다. 입력한 키와 토큰 값을 다시 확인해주세요'}
+                      'Spotify 인증에 실패했습니다. Redirect URI 등록 여부와 Client ID를 확인해주세요'}
                   </span>
                 </div>
               )}
@@ -797,7 +811,47 @@ export function SettingsModal({
                 </div>
               )}
 
-              <div className="space-y-3">
+              {/* Step 1: Redirect URI Copy Field */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label
+                    htmlFor="spotify-redirect-uri"
+                    className="text-xs font-normal text-[var(--text-secondary)]"
+                  >
+                    Redirect URI (Spotify 앱 설정에 등록)
+                  </label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    id="spotify-redirect-uri"
+                    type="text"
+                    readOnly
+                    value={redirectUri}
+                    className="font-mono-tech flex-1 h-9 px-3 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-xs text-[var(--text-secondary)] focus:outline-none select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyRedirectUri()}
+                    aria-label="Redirect URI 복사"
+                    className="h-9 px-3 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-hairline)] text-xs text-[var(--text-primary)] hover:bg-[#2c2c2f] flex items-center gap-1.5 active:scale-[0.97] transition-[background-color,transform] duration-150 cursor-pointer shrink-0"
+                  >
+                    {copiedUri ? (
+                      <>
+                        <Check size={14} strokeWidth={1.5} className="text-[var(--accent)]" />
+                        <span>복사됨</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={14} strokeWidth={1.5} />
+                        <span>복사</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Step 2: Client ID + One-Click PKCE Button */}
+              <div className="space-y-2.5">
                 <div>
                   <label
                     htmlFor="input-client-id"
@@ -816,84 +870,126 @@ export function SettingsModal({
                       setClientId(e.target.value);
                       if (validationError) onClearValidationError();
                     }}
-                    placeholder="32자리 영문·숫자 (일괄 붙여넣기 지원)"
+                    placeholder="32자리 영문·숫자 (JSON·.env 일괄 붙여넣기 지원)"
                     className="w-full h-9 px-3 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
                   />
                 </div>
 
-                <div>
-                  <label
-                    htmlFor="input-client-secret"
-                    className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
-                  >
-                    Client Secret
-                  </label>
-                  <div className="relative flex items-center">
-                    <input
-                      id="input-client-secret"
-                      type={showSecret ? 'text' : 'password'}
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={clientSecret}
-                      onPaste={handleSmartPaste}
-                      onChange={(e) => {
-                        setClientSecret(e.target.value);
-                        if (validationError) onClearValidationError();
-                      }}
-                      placeholder="시크릿 키"
-                      className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowSecret((prev) => !prev)}
-                      aria-label={showSecret ? 'Client Secret 숨기기' : 'Client Secret 표시'}
-                      className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                    >
-                      {showSecret ? (
-                        <EyeOff size={15} strokeWidth={1.5} />
-                      ) : (
-                        <Eye size={15} strokeWidth={1.5} />
-                      )}
-                    </button>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  disabled={isSpotifyConnecting}
+                  onClick={() => onStartPkceConnect(clientId)}
+                  className="w-full h-10 rounded-lg bg-[var(--text-primary)] text-[var(--bg-deepest)] font-medium text-sm hover:opacity-90 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-[opacity,transform] duration-150 cursor-pointer"
+                >
+                  {isPkceAuthorizing ? 'Spotify 인증 창 대기 중...' : 'Spotify로 원클릭 연결'}
+                </button>
+              </div>
 
-                <div>
-                  <label
-                    htmlFor="input-refresh-token"
-                    className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
-                  >
-                    Refresh Token
-                  </label>
-                  <div className="relative flex items-center">
-                    <input
-                      id="input-refresh-token"
-                      type={showRefreshToken ? 'text' : 'password'}
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={refreshToken}
-                      onPaste={handleSmartPaste}
-                      onChange={(e) => {
-                        setRefreshToken(e.target.value);
-                        if (validationError) onClearValidationError();
-                      }}
-                      placeholder="발급받은 리프레시 토큰"
-                      className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowRefreshToken((prev) => !prev)}
-                      aria-label={showRefreshToken ? 'Refresh Token 숨기기' : 'Refresh Token 표시'}
-                      className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                    >
-                      {showRefreshToken ? (
-                        <EyeOff size={15} strokeWidth={1.5} />
-                      ) : (
-                        <Eye size={15} strokeWidth={1.5} />
-                      )}
-                    </button>
+              {/* Optional Manual Token Disclosure (Classic Client Secret + Refresh Token) */}
+              <div className="pt-2 border-t border-[var(--border-hairline)]">
+                <button
+                  type="button"
+                  aria-expanded={showManualTokens}
+                  onClick={() => setShowManualTokens((prev) => !prev)}
+                  className="w-full h-8 flex items-center justify-between text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  <span>수동 토큰 직접 입력 (기존 Refresh Token 보유 시)</span>
+                  {showManualTokens ? (
+                    <ChevronUp size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+                  ) : (
+                    <ChevronDown size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+                  )}
+                </button>
+
+                {showManualTokens && (
+                  <div className="space-y-3 pt-2">
+                    <div>
+                      <label
+                        htmlFor="input-client-secret"
+                        className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
+                      >
+                        Client Secret (선택 · PKCE 토큰일 경우 비워둠)
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          id="input-client-secret"
+                          type={showSecret ? 'text' : 'password'}
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={clientSecret}
+                          onPaste={handleSmartPaste}
+                          onChange={(e) => {
+                            setClientSecret(e.target.value);
+                            if (validationError) onClearValidationError();
+                          }}
+                          placeholder="시크릿 키"
+                          className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowSecret((prev) => !prev)}
+                          aria-label={showSecret ? 'Client Secret 숨기기' : 'Client Secret 표시'}
+                          className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                        >
+                          {showSecret ? (
+                            <EyeOff size={15} strokeWidth={1.5} />
+                          ) : (
+                            <Eye size={15} strokeWidth={1.5} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="input-refresh-token"
+                        className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
+                      >
+                        Refresh Token
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          id="input-refresh-token"
+                          type={showRefreshToken ? 'text' : 'password'}
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={refreshToken}
+                          onPaste={handleSmartPaste}
+                          onChange={(e) => {
+                            setRefreshToken(e.target.value);
+                            if (validationError) onClearValidationError();
+                          }}
+                          placeholder="발급받은 리프레시 토큰"
+                          className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowRefreshToken((prev) => !prev)}
+                          aria-label={
+                            showRefreshToken ? 'Refresh Token 숨기기' : 'Refresh Token 표시'
+                          }
+                          className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                        >
+                          {showRefreshToken ? (
+                            <EyeOff size={15} strokeWidth={1.5} />
+                          ) : (
+                            <Eye size={15} strokeWidth={1.5} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={isSpotifyConnecting}
+                        className="h-9 px-4 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-strong)] text-[var(--text-primary)] font-medium text-xs hover:bg-[#2c2c2f] active:scale-[0.97] disabled:opacity-50 transition-[background-color,transform] duration-150 cursor-pointer"
+                      >
+                        수동 토큰 저장 및 연결
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div className="flex items-center justify-between pt-1">
@@ -922,11 +1018,11 @@ export function SettingsModal({
                 UI 미리보기
               </button>
               <button
-                type="submit"
-                disabled={isSpotifyConnecting}
-                className="h-9 px-4 rounded-lg bg-[var(--text-primary)] text-[var(--bg-deepest)] font-medium text-sm hover:opacity-90 active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none transition-[opacity,transform] duration-150 cursor-pointer whitespace-nowrap"
+                type="button"
+                onClick={onClose}
+                className="h-9 px-4 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-hairline)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-normal text-sm active:scale-[0.97] transition-[color,transform] duration-150 cursor-pointer whitespace-nowrap"
               >
-                {isSpotifyConnecting ? '연결 중...' : '저장 및 연결'}
+                닫기
               </button>
             </div>
           </form>

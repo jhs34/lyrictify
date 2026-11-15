@@ -1,23 +1,31 @@
-import { LrcLibSongItem, LyricsFetchResult } from '../types/lyrics';
-import { buildSearchQueries, selectBestLyricsFromCandidates } from '../utils/lyrics';
+import { LrcLibCandidate, LrcLibSongItem, LyricsFetchResult } from '../types/lyrics';
+import {
+  buildSearchQueries,
+  normalizeLrcLibCandidates,
+  selectBestLyricsFromCandidates,
+} from '../utils/lyrics';
 
-async function searchLrcLibSingleQuery(
-  queryStr: string,
-  targetArtist: string,
-  targetDurationSec: number,
-  signal?: AbortSignal
-): Promise<{ type: 'synced' | 'plain'; text: string } | null> {
+async function fetchRawLrcLibItems(queryStr: string, signal?: AbortSignal): Promise<LrcLibSongItem[]> {
   try {
     const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(queryStr)}`, {
       signal,
     });
-    if (!res.ok) return null;
-
+    if (!res.ok) return [];
     const data = (await res.json()) as LrcLibSongItem[];
-    return selectBestLyricsFromCandidates(data, queryStr, targetArtist, targetDurationSec);
+    return Array.isArray(data) ? data : [];
   } catch {
-    return null;
+    return [];
   }
+}
+
+export async function fetchLrcLibCandidates(
+  queryStr: string,
+  signal?: AbortSignal
+): Promise<LrcLibCandidate[]> {
+  const trimmed = queryStr.trim();
+  if (!trimmed) return [];
+  const raw = await fetchRawLrcLibItems(trimmed, signal);
+  return normalizeLrcLibCandidates(raw);
 }
 
 export async function searchLyricsOnLrcLib(
@@ -29,16 +37,33 @@ export async function searchLyricsOnLrcLib(
   const { firstArtist, queries } = buildSearchQueries(title, artist);
   const durationSec = durationMs ? Math.round(durationMs / 1000) : 0;
 
+  let collectedCandidates: LrcLibCandidate[] = [];
+
   for (const query of queries) {
     if (signal?.aborted) return null;
-    const found = await searchLrcLibSingleQuery(query, firstArtist, durationSec, signal);
-    if (found) {
+    const rawItems = await fetchRawLrcLibItems(query, signal);
+    if (rawItems.length === 0) continue;
+
+    const normalized = normalizeLrcLibCandidates(rawItems);
+    if (collectedCandidates.length === 0 && normalized.length > 0) {
+      collectedCandidates = normalized;
+    }
+
+    const best = selectBestLyricsFromCandidates(rawItems, query, firstArtist, durationSec);
+    if (best) {
       return {
-        type: found.type,
-        text: found.text,
-        sourceLabel: found.type === 'plain' ? 'LRCLIB (Plain Text)' : 'LRCLIB',
+        type: best.type,
+        text: best.text,
+        sourceLabel: best.type === 'plain' ? 'LRCLIB (일반 가사)' : 'LRCLIB',
+        selectedId: best.selectedId,
+        candidates: normalized,
       };
     }
+  }
+
+  if (collectedCandidates.length > 0) {
+    // Even if strict artist/duration filter didn't auto-pick, return null or allow manual pick via fetchLrcLibCandidates
+    return null;
   }
 
   return null;

@@ -1,11 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Disc3, Maximize2, Minimize2, SlidersHorizontal } from 'lucide-react';
+import {
+  Columns2,
+  Disc3,
+  ListMusic,
+  Maximize2,
+  Minimize2,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { TrackMetadata } from '../types/lyrics';
 
 interface HeaderProps {
   track: TrackMetadata | null;
   isFullscreen: boolean;
+  isIdleHidden: boolean;
+  splitLayout: boolean;
   syncFeedback: string | null;
+  onToggleSplitLayout: () => void;
+  onOpenLyricPicker: () => void;
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
 }
@@ -13,7 +24,11 @@ interface HeaderProps {
 export function Header({
   track,
   isFullscreen,
+  isIdleHidden,
+  splitLayout,
   syncFeedback,
+  onToggleSplitLayout,
+  onOpenLyricPicker,
   onToggleFullscreen,
   onOpenSettings,
 }: HeaderProps) {
@@ -24,34 +39,50 @@ export function Header({
   }, [track?.albumArtUrl]);
 
   return (
-    <header className="flex justify-between items-center px-6 sm:px-8 h-16 shrink-0 z-10 w-full max-w-5xl mx-auto">
-      <div className="flex items-center gap-3 overflow-hidden min-w-0 mr-4">
+    <header
+      data-idle-hidden={isIdleHidden ? 'true' : 'false'}
+      className="flex justify-between items-center px-6 sm:px-8 h-16 shrink-0 z-20 w-full max-w-6xl mx-auto"
+    >
+      <div
+        className={`flex items-center gap-3 overflow-hidden min-w-0 mr-4 transition-opacity duration-300 ${
+          isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}
+      >
         {track ? (
           <>
-            {track.albumArtUrl && !imgFailed ? (
-              <img
-                src={track.albumArtUrl}
-                alt={`${track.title} 앨범 아트`}
-                referrerPolicy="no-referrer"
-                onError={() => setImgFailed(true)}
-                className="w-11 h-11 rounded-lg object-cover transition-opacity duration-300 flex-none border border-[var(--border-hairline)]"
-              />
-            ) : (
-              <div
-                aria-hidden="true"
-                className="w-11 h-11 rounded-lg bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center flex-none"
-              >
-                <Disc3 size={18} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+            {/* In Split Layout on lg+ wide screens, the large album art & title sit in the left panel */}
+            <div className={`items-center gap-3 min-w-0 ${splitLayout ? 'flex lg:hidden' : 'flex'}`}>
+              {track.albumArtUrl && !imgFailed ? (
+                <img
+                  src={track.albumArtUrl}
+                  alt={`${track.title} 앨범 아트`}
+                  referrerPolicy="no-referrer"
+                  onError={() => setImgFailed(true)}
+                  className="w-11 h-11 rounded-lg object-cover transition-opacity duration-300 flex-none border border-[var(--border-hairline)]"
+                />
+              ) : (
+                <div
+                  aria-hidden="true"
+                  className="w-11 h-11 rounded-lg bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center flex-none"
+                >
+                  <Disc3 size={18} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <h1 className="text-[15px] sm:text-base font-medium truncate text-[var(--text-primary)] leading-5">
+                  {track.title}
+                </h1>
+                <p className="text-[13px] font-normal text-[var(--text-secondary)] truncate leading-5">
+                  {track.artist}
+                </p>
               </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <h1 className="text-[15px] sm:text-base font-medium truncate text-[var(--text-primary)] leading-5">
-                {track.title}
-              </h1>
-              <p className="text-[13px] font-normal text-[var(--text-secondary)] truncate leading-5">
-                {track.artist}
-              </p>
             </div>
+
+            {splitLayout && (
+              <span className="hidden lg:inline-block text-sm font-medium text-[var(--text-secondary)] whitespace-nowrap">
+                Lyrictify
+              </span>
+            )}
           </>
         ) : (
           <span className="text-base font-medium text-[var(--text-primary)] whitespace-nowrap shrink-0">
@@ -60,7 +91,11 @@ export function Header({
         )}
       </div>
 
-      <div className="flex items-center gap-2 flex-none">
+      <div
+        className={`flex items-center gap-2 flex-none transition-opacity duration-300 ${
+          isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}
+      >
         {syncFeedback && (
           <div
             role="status"
@@ -70,6 +105,36 @@ export function Header({
             {syncFeedback}
           </div>
         )}
+
+        {track && (
+          <button
+            type="button"
+            onClick={onOpenLyricPicker}
+            aria-label="다른 가사 선택"
+            title="다른 가사 선택 (LRCLIB)"
+            className="w-10 h-10 flex-none rounded-lg surface-floating text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-raised)] active:scale-[0.97] flex items-center justify-center shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--text-primary)] cursor-pointer"
+          >
+            <ListMusic size={18} strokeWidth={1.5} />
+          </button>
+        )}
+
+        {track && (
+          <button
+            type="button"
+            onClick={onToggleSplitLayout}
+            aria-label={splitLayout ? '기본 레이아웃으로 전환' : '분할 레이아웃으로 전환'}
+            aria-pressed={splitLayout}
+            title={splitLayout ? '기본 단독 가사 뷰로 전환' : '앨범 아트 분할 뷰로 전환'}
+            className={`hidden lg:flex w-10 h-10 flex-none rounded-lg surface-floating active:scale-[0.97] items-center justify-center shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--text-primary)] cursor-pointer ${
+              splitLayout
+                ? 'text-[var(--accent)] border-[var(--accent)]/45'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-raised)]'
+            }`}
+          >
+            <Columns2 size={18} strokeWidth={1.5} />
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onToggleFullscreen}
@@ -83,6 +148,7 @@ export function Header({
             <Maximize2 size={18} strokeWidth={1.5} />
           )}
         </button>
+
         <button
           type="button"
           onClick={onOpenSettings}

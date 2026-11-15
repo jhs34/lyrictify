@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lyrictify · Spotify 인증 처리 중</title>
+    <style>
+      body {
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #141415;
+        color: #ededed;
+        font-family: -apple-system, BlinkMacSystemFont, "Noto Sans KR", sans-serif;
+        font-size: 14px;
+      }
+      .box {
+        padding: 24px 28px;
+        border-radius: 12px;
+        background: #19191b;
+        border: 1px solid rgba(237, 237, 237, 0.08);
+        text-align: center;
+      }
+      .sub {
+        color: #a1a1a6;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div id="msg">Spotify 인증 정보를 전달하는 중입니다</div>
+      <div class="sub">잠시 후 창이 자동으로 닫힙니다</div>
+    </div>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var payload = {
+          type: 'LYRICTIFY_SPOTIFY_PKCE_CALLBACK',
+          code: params.get('code') || '',
+          state: params.get('state') || '',
+          error: params.get('error') || '',
+        };
+
+        try {
+          localStorage.setItem('sp_pkce_pending_callback', JSON.stringify(payload));
+        } catch (e) {}
+
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(payload, '*');
+            window.close();
+            return;
+          } catch (e) {}
+        }
+
+        window.location.replace('./');
+      })();
+    </script>
+  </body>
+</html>

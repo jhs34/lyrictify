@@ -113,7 +113,7 @@ body,
 .lyric-line {
   font-size: var(--lyric-base-size);
   line-height: var(--lyric-line-height);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   letter-spacing: var(--lyric-tracking, 0em);
   transition:
@@ -129,8 +129,150 @@ body,
 }
 
 .lyric-line.active {
-  font-weight: 600;
   color: #ffffff;
+}
+
+.interlude-slot {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    grid-template-rows 680ms var(--ease-out),
+    opacity 460ms var(--ease-out);
+}
+
+.interlude-slot[data-active="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 680ms var(--ease-out),
+    opacity 540ms var(--ease-out);
+}
+
+.interlude-slot-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.interlude-slot-inner {
+  /* Matches .lyric-line-wrapper margin-bottom below so dots sit optically centered between upper and lower lyric lines */
+  padding-top: calc(var(--lyric-margin-bottom) + 1px);
+  padding-bottom: 0;
+  margin-left: -6px;
+  padding-left: 6px;
+  padding-right: 8px;
+}
+
+.interlude-slot[data-interlude-after="-1"] .interlude-slot-inner {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.interlude-dots-stage {
+  display: flex;
+  align-items: center;
+  gap: clamp(7px, calc(var(--lyric-base-size) * 0.34), 14px);
+  height: clamp(18px, calc(var(--lyric-base-size) * 0.75), 30px);
+  opacity: 0;
+  filter: blur(6px);
+  transform: translateY(-3px) scale(0.84);
+  transform-origin: left center;
+  transition:
+    opacity 380ms var(--ease-out),
+    filter 440ms var(--ease-out),
+    transform 560ms var(--ease-out);
+  will-change: transform, opacity, filter;
+}
+
+.interlude-slot[data-active="true"] .interlude-dots-stage {
+  opacity: 1;
+  filter: blur(0px);
+  transform: translateY(0) scale(1);
+  transition:
+    opacity 540ms var(--ease-out) 60ms,
+    filter 620ms var(--ease-out) 40ms,
+    transform 680ms var(--ease-out);
+}
+
+.interlude-dot {
+  width: clamp(7px, calc(var(--lyric-base-size) * 0.32), 13px);
+  height: clamp(7px, calc(var(--lyric-base-size) * 0.32), 13px);
+  border-radius: 50%;
+  background-color: var(--text-primary);
+  opacity: 0.26;
+  animation: interlude-dot-wave 1.8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.interlude-dot:nth-child(2) {
+  animation-delay: 260ms;
+}
+
+.interlude-dot:nth-child(3) {
+  animation-delay: 520ms;
+}
+
+.interlude-slot[data-playing="false"] .interlude-dot {
+  animation-play-state: paused;
+}
+
+@keyframes interlude-dot-wave {
+  0%,
+  100% {
+    opacity: 0.26;
+    transform: translateY(0) scale(0.88);
+  }
+  35% {
+    opacity: 0.96;
+    transform: translateY(-1.5px) scale(1.14);
+  }
+  72% {
+    opacity: 0.3;
+    transform: translateY(0) scale(0.9);
+  }
+}
+
+.lyric-marquee-mask {
+  overflow: hidden;
+  margin-left: -10px;
+  padding-left: 10px;
+  padding-right: 14px;
+  mask-image: linear-gradient(
+    to right,
+    transparent 0px,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0px,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+}
+
+.lyric-marquee-track {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  animation: lyric-marquee-pingpong var(--marquee-duration, 7s) ease-in-out infinite;
+}
+
+@keyframes lyric-marquee-pingpong {
+  0%,
+  16% {
+    transform: translate3d(0, 0, 0);
+  }
+  50%,
+  66% {
+    transform: translate3d(calc(-1 * var(--marquee-offset, 0px)), 0, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 input[type="range"].lyrictify-range {
@@ -205,63 +347,90 @@ input[type="number"].no-spinner {
 }
 
 .ambient-light-stage {
-  transition: opacity 700ms var(--ease-out);
+  mix-blend-mode: screen;
+  transition: opacity 650ms var(--ease-out);
 }
 
 .ambient-lobe-primary {
   background: radial-gradient(
-    circle at 32% 38%,
-    rgba(var(--ambient-rgb), 0.46) 0%,
-    rgba(var(--ambient-rgb), 0.18) 42%,
+    circle at 28% 34%,
+    rgba(var(--ambient-rgb), 0.78) 0%,
+    rgba(var(--ambient-rgb), 0.34) 40%,
     rgba(var(--ambient-rgb), 0) 72%
   );
-  animation: ambient-pulse-primary 6.8s ease-in-out infinite;
+  animation: ambient-pulse-primary 5.2s ease-in-out infinite;
   will-change: transform, opacity;
 }
 
 .ambient-lobe-secondary {
   background: radial-gradient(
-    circle at 72% 64%,
-    rgba(var(--ambient-secondary-rgb), 0.38) 0%,
-    rgba(var(--ambient-secondary-rgb), 0.14) 45%,
+    circle at 74% 66%,
+    rgba(var(--ambient-secondary-rgb), 0.72) 0%,
+    rgba(var(--ambient-secondary-rgb), 0.3) 42%,
     rgba(var(--ambient-secondary-rgb), 0) 74%
   );
-  animation: ambient-pulse-secondary 9.2s ease-in-out infinite;
+  animation: ambient-pulse-secondary 6.8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.ambient-lobe-bloom {
+  background: radial-gradient(
+    circle at 54% 48%,
+    rgba(var(--ambient-rgb), 0.54) 0%,
+    rgba(var(--ambient-secondary-rgb), 0.22) 38%,
+    rgba(var(--ambient-rgb), 0) 68%
+  );
+  animation: ambient-pulse-bloom 3.8s ease-in-out infinite;
   will-change: transform, opacity;
 }
 
 .ambient-light-stage.ambient-paused .ambient-lobe-primary,
-.ambient-light-stage.ambient-paused .ambient-lobe-secondary {
+.ambient-light-stage.ambient-paused .ambient-lobe-secondary,
+.ambient-light-stage.ambient-paused .ambient-lobe-bloom {
   animation-duration: 14s;
 }
 
 @keyframes ambient-pulse-primary {
   0%,
   100% {
-    opacity: 0.55;
-    transform: translate3d(-2%, -2%, 0) scale(0.96);
+    opacity: 0.58;
+    transform: translate3d(-10%, -8%, 0) scale(0.92);
   }
   50% {
     opacity: 1;
-    transform: translate3d(3%, 2%, 0) scale(1.12);
+    transform: translate3d(14%, 10%, 0) scale(1.22);
   }
 }
 
 @keyframes ambient-pulse-secondary {
   0%,
   100% {
-    opacity: 0.92;
-    transform: translate3d(2%, 3%, 0) scale(1.08);
+    opacity: 0.95;
+    transform: translate3d(10%, 10%, 0) scale(1.18);
   }
   50% {
     opacity: 0.48;
-    transform: translate3d(-3%, -2%, 0) scale(0.94);
+    transform: translate3d(-14%, -10%, 0) scale(0.9);
+  }
+}
+
+@keyframes ambient-pulse-bloom {
+  0%,
+  100% {
+    opacity: 0.26;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 0.88;
+    transform: scale(1.24);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lyric-line-wrapper,
   .lyric-line,
+  .interlude-slot,
+  .interlude-dots-stage,
   .surface-floating,
   .surface-modal,
   .ambient-light-stage {
@@ -269,9 +438,19 @@ input[type="number"].no-spinner {
   }
 
   .ambient-lobe-primary,
-  .ambient-lobe-secondary {
+  .ambient-lobe-secondary,
+  .ambient-lobe-bloom {
     animation: none;
-    opacity: 0.72;
+    opacity: 0.65;
+  }
+
+  .interlude-dot {
+    animation: none;
+    opacity: 0.65;
+  }
+
+  .lyric-marquee-track {
+    animation: none;
   }
 }
 

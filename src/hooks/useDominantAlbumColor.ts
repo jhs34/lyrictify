@@ -16,6 +16,20 @@ function applyAmbientColorVariables(primary: RGBColor): void {
   );
 }
 
+function sampleImageElement(img: HTMLImageElement): RGBColor {
+  const sampleSize = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = sampleSize;
+  canvas.height = sampleSize;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return DEFAULT_AMBIENT_RGB;
+  }
+  ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
+  const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
+  return extractDominantColorFromPixels(imageData.data);
+}
+
 export function useDominantAlbumColor(albumArtUrl: string | null): RGBColor {
   const [dominantColor, setDominantColor] = useState<RGBColor>(DEFAULT_AMBIENT_RGB);
 
@@ -27,48 +41,65 @@ export function useDominantAlbumColor(albumArtUrl: string | null): RGBColor {
     }
 
     let cancelled = false;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.referrerPolicy = 'no-referrer';
+    let objectUrlToRevoke: string | null = null;
+    const abortController = new AbortController();
 
-    img.onload = () => {
-      if (cancelled) return;
+    const loadAndExtract = async () => {
       try {
-        const sampleSize = 24;
-        const canvas = document.createElement('canvas');
-        canvas.width = sampleSize;
-        canvas.height = sampleSize;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) {
-          applyAmbientColorVariables(DEFAULT_AMBIENT_RGB);
-          return;
+        let srcForCanvas = albumArtUrl;
+
+        // Fetch remote images via CORS into a same-origin Blob URL to avoid Chrome's non-CORS <img> cache collision
+        if (/^https?:\/\//i.test(albumArtUrl)) {
+          const response = await fetch(albumArtUrl, {
+            mode: 'cors',
+            credentials: 'omit',
+            signal: abortController.signal,
+          });
+          if (!response.ok) {
+            throw new Error('Album art CORS fetch failed');
+          }
+          const blob = await response.blob();
+          objectUrlToRevoke = URL.createObjectURL(blob);
+          srcForCanvas = objectUrlToRevoke;
         }
-        ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
-        const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
-        const extracted = extractDominantColorFromPixels(imageData.data);
-        if (!cancelled) {
-          setDominantColor(extracted);
-          applyAmbientColorVariables(extracted);
+
+        const img = new Image();
+        img.decoding = 'async';
+        if (!objectUrlToRevoke) {
+          img.crossOrigin = 'anonymous';
         }
+
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error('Image decode failed'));
+          img.src = srcForCanvas;
+        });
+
+        if (cancelled) return;
+        const extracted = sampleImageElement(img);
+        setDominantColor(extracted);
+        applyAmbientColorVariables(extracted);
       } catch {
         if (!cancelled) {
           setDominantColor(DEFAULT_AMBIENT_RGB);
           applyAmbientColorVariables(DEFAULT_AMBIENT_RGB);
         }
+      } finally {
+        if (objectUrlToRevoke) {
+          URL.revokeObjectURL(objectUrlToRevoke);
+          objectUrlToRevoke = null;
+        }
       }
     };
 
-    img.onerror = () => {
-      if (!cancelled) {
-        setDominantColor(DEFAULT_AMBIENT_RGB);
-        applyAmbientColorVariables(DEFAULT_AMBIENT_RGB);
-      }
-    };
-
-    img.src = albumArtUrl;
+    void loadAndExtract();
 
     return () => {
       cancelled = true;
+      abortController.abort();
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke);
+      }
     };
   }, [albumArtUrl]);
 

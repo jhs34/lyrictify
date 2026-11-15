@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import previewAlbumCover from './assets/images/preview_album_cover_1794683829452.jpg';
 import { Header } from './components/Header';
+import { LyricPickerModal } from './components/LyricPickerModal';
 import { LyricsViewport } from './components/LyricsViewport';
 import { MediaControls } from './components/MediaControls';
 import { SettingsModal } from './components/SettingsModal';
 import { useDominantAlbumColor } from './hooks/useDominantAlbumColor';
+import { useIdleAutoHide } from './hooks/useIdleAutoHide';
 import { useWakeLock } from './hooks/useWakeLock';
 import { searchLyricsOnLrcLib } from './services/lrclib';
 import {
   SpotifyActionResult,
+  SpotifyTokenResponse,
+  exchangeSpotifyPkceCode,
   fetchCurrentlyPlaying,
   refreshSpotifyAccessToken,
   sendSpotifyNext,
@@ -18,6 +22,7 @@ import {
 } from './services/spotify';
 import {
   BooleanSettingKey,
+  LrcLibCandidate,
   LyricLine,
   NumericSettingKey,
   PresetId,
@@ -29,6 +34,7 @@ import {
 } from './types/lyrics';
 import {
   DEFAULT_UI_SETTINGS,
+  PREVIEW_CANDIDATES,
   PREVIEW_DURATION_MS,
   PREVIEW_LRC,
   UI_PRESETS,
@@ -39,13 +45,22 @@ import {
   stepSyncOffset,
 } from './utils/lyrics';
 import {
+  buildSpotifyAuthorizeUrl,
+  generatePkcePair,
+  getSpotifyRedirectUri,
+} from './utils/pkce';
+import {
   applySettingsToDocumentCss,
+  clearPkceSession,
   clearStoredCredentials,
+  consumePendingPkceCallback,
+  loadPkceSession,
   loadStoredCredentials,
   loadStoredUISettings,
   saveAllUISettings,
   saveBooleanSetting,
   saveNumericSetting,
+  savePkceSession,
   saveStoredCredentials,
 } from './utils/storage';
 
@@ -83,6 +98,10 @@ export default function App() {
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [isPlainLyrics, setIsPlainLyrics] = useState<boolean>(false);
   const [lyricSource, setLyricSource] = useState<string>('');
+  const [lyricCandidates, setLyricCandidates] = useState<LrcLibCandidate[]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [isPickerOpen, setIsPickerOpen] = useState<boolean>(false);
+  const [isPkceAuthorizing, setIsPkceAuthorizing] = useState<boolean>(false);
 
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
@@ -97,9 +116,13 @@ export default function App() {
   const lyricsAbortRef = useRef<AbortController | null>(null);
   const dragReleaseTimerRef = useRef<number | null>(null);
   const syncFeedbackTimerRef = useRef<number | null>(null);
+  const popupWatchTimerRef = useRef<number | null>(null);
 
   useWakeLock(settings.keepAwake);
   useDominantAlbumColor(track?.albumArtUrl ?? null);
+  const isIdleHidden = useIdleAutoHide(
+    settings.autoHideHud && !isModalOpen && !isPickerOpen && status === 'lyrics_ready'
+  );
 
   // Sync CSS variables synchronously before layout measurements in child effects
   useLayoutEffect(() => {
@@ -171,6 +194,26 @@ export default function App() {
     }
   }, []);
 
+  const applyRefreshedToken = useCallback(
+    (baseCreds: SpotifyCredentials, tokenRes: SpotifyTokenResponse): SpotifyCredentials => {
+      accessTokenRef.current = tokenRes.accessToken;
+      if (
+        tokenRes.rotatedRefreshToken &&
+        tokenRes.rotatedRefreshToken !== baseCreds.refreshToken
+      ) {
+        const updated: SpotifyCredentials = {
+          ...baseCreds,
+          refreshToken: tokenRes.rotatedRefreshToken,
+        };
+        saveStoredCredentials(updated);
+        setCredentials(updated);
+        return updated;
+      }
+      return baseCreds;
+    },
+    []
+  );
+
   const loadLyricsForTrack = useCallback(async (nextTrack: TrackMetadata) => {
     lyricsAbortRef.current?.abort();
     const controller = new AbortController();
@@ -180,6 +223,8 @@ export default function App() {
     setLyrics([]);
     setLyricSource('');
     setIsPlainLyrics(false);
+    setLyricCandidates([]);
+    setSelectedCandidateId(null);
 
     const found = await searchLyricsOnLrcLib(
       nextTrack.title,
@@ -191,6 +236,8 @@ export default function App() {
     if (controller.signal.aborted) return;
 
     if (found) {
+      setLyricCandidates(found.candidates);
+      setSelectedCandidateId(found.selectedId ?? null);
       const plain = found.type === 'plain';
       const parsed = plain ? parsePlainLyrics(found.text) : parseLRC(found.text);
       if (parsed.length > 0) {
@@ -214,7 +261,6 @@ export default function App() {
 
       if (result.status === 'no_content') {
         setIsPlaying(false);
-        // Preserve already-loaded track & lyrics if Spotify merely went idle while paused
         if (!currentSongIdRef.current) {
           setShowControls(false);
           setStatus('spotify_idle');
@@ -225,7 +271,7 @@ export default function App() {
       if (result.status === 'unauthorized') {
         const refreshed = await refreshSpotifyAccessToken(credsForRefresh);
         if (refreshed) {
-          accessTokenRef.current = refreshed;
+          applyRefreshedToken(credsForRefresh, refreshed);
         } else {
           setIsPlaying(false);
           setShowControls(false);
@@ -253,7 +299,7 @@ export default function App() {
         setTrack((prev) => prev ?? result.track);
       }
     },
-    [loadLyricsForTrack]
+    [applyRefreshedToken, loadLyricsForTrack]
   );
 
   // Execute a Spotify player command and automatically refresh token + retry once on 401
@@ -272,13 +318,13 @@ export default function App() {
           setIsModalOpen(true);
           return false;
         }
-        accessTokenRef.current = refreshed;
-        const retry = await action(refreshed);
+        applyRefreshedToken(credentials, refreshed);
+        const retry = await action(refreshed.accessToken);
         return retry === 'ok';
       }
       return false;
     },
-    [credentials]
+    [credentials, applyRefreshedToken]
   );
 
   const connectSpotify = useCallback(
@@ -289,11 +335,13 @@ export default function App() {
       currentSongIdRef.current = '';
       setTrack(null);
       setLyrics([]);
+      setLyricCandidates([]);
+      setSelectedCandidateId(null);
       setShowControls(false);
       setStatus('connecting');
 
-      const token = await refreshSpotifyAccessToken(creds);
-      if (!token) {
+      const tokenRes = await refreshSpotifyAccessToken(creds);
+      if (!tokenRes) {
         accessTokenRef.current = '';
         setStatus('auth_error');
         setModalInitialTab('spotify');
@@ -301,11 +349,180 @@ export default function App() {
         return;
       }
 
-      accessTokenRef.current = token;
-      await pollSpotifyPlayback(creds);
+      const activeCreds = applyRefreshedToken(creds, tokenRes);
+      await pollSpotifyPlayback(activeCreds);
+    },
+    [applyRefreshedToken, pollSpotifyPlayback]
+  );
+
+  const completePkceCallback = useCallback(
+    async (payload: { code: string; state: string; error: string }) => {
+      if (popupWatchTimerRef.current !== null) {
+        window.clearInterval(popupWatchTimerRef.current);
+        popupWatchTimerRef.current = null;
+      }
+      setIsPkceAuthorizing(false);
+
+      const session = loadPkceSession();
+      clearPkceSession();
+
+      if (payload.error) {
+        setValidationError('Spotify 권한 승인이 취소되었거나 거부되었습니다');
+        setModalInitialTab('spotify');
+        setIsModalOpen(true);
+        return;
+      }
+
+      if (!session || !payload.code || payload.state !== session.state) {
+        setValidationError('인증 세션 상태가 일치하지 않습니다. 다시 원클릭 연결을 시도해주세요');
+        setModalInitialTab('spotify');
+        setIsModalOpen(true);
+        return;
+      }
+
+      setValidationError(null);
+      setStatus('connecting');
+
+      const exchanged = await exchangeSpotifyPkceCode({
+        clientId: session.clientId,
+        code: payload.code,
+        codeVerifier: session.codeVerifier,
+        redirectUri: session.redirectUri,
+      });
+
+      if (!exchanged) {
+        accessTokenRef.current = '';
+        setStatus('auth_error');
+        setValidationError('토큰 발급에 실패했습니다. Spotify 앱의 Redirect URI 등록을 확인해주세요');
+        setModalInitialTab('spotify');
+        setIsModalOpen(true);
+        return;
+      }
+
+      const nextCreds: SpotifyCredentials = {
+        clientId: session.clientId,
+        clientSecret: '',
+        refreshToken: exchanged.refreshToken,
+      };
+      saveStoredCredentials(nextCreds);
+      setCredentials(nextCreds);
+      accessTokenRef.current = exchanged.accessToken;
+      isPreviewRef.current = false;
+      setIsPreviewMode(false);
+      currentSongIdRef.current = '';
+      setTrack(null);
+      setLyrics([]);
+      setIsModalOpen(false);
+      await pollSpotifyPlayback(nextCreds);
     },
     [pollSpotifyPlayback]
   );
+
+  const handleStartPkceConnect = useCallback(async (rawClientId: string) => {
+    const trimmedId = rawClientId.trim();
+    if (!trimmedId || /[^\x20-\x7E]/.test(trimmedId)) {
+      setValidationError('유효한 Spotify Client ID를 입력해주세요');
+      return;
+    }
+
+    setValidationError(null);
+
+    try {
+      const { codeVerifier, codeChallenge, state } = await generatePkcePair();
+      const redirectUri = getSpotifyRedirectUri();
+
+      savePkceSession({
+        clientId: trimmedId,
+        codeVerifier,
+        state,
+        redirectUri,
+      });
+
+      setCredentials((prev) => {
+        const updated = { ...prev, clientId: trimmedId };
+        saveStoredCredentials(updated);
+        return updated;
+      });
+
+      const authUrl = buildSpotifyAuthorizeUrl({
+        clientId: trimmedId,
+        redirectUri,
+        codeChallenge,
+        state,
+      });
+
+      const popup = window.open(authUrl, 'spotify_pkce_popup', 'width=520,height=720');
+      if (!popup) {
+        clearPkceSession();
+        setIsPkceAuthorizing(false);
+        setValidationError('브라우저 팝업 차단을 해제한 뒤 다시 시도해주세요');
+        return;
+      }
+
+      setIsPkceAuthorizing(true);
+
+      if (popupWatchTimerRef.current !== null) {
+        window.clearInterval(popupWatchTimerRef.current);
+      }
+      popupWatchTimerRef.current = window.setInterval(() => {
+        if (popup.closed) {
+          if (popupWatchTimerRef.current !== null) {
+            window.clearInterval(popupWatchTimerRef.current);
+            popupWatchTimerRef.current = null;
+          }
+          const pending = consumePendingPkceCallback();
+          if (pending && (pending.code || pending.error)) {
+            void completePkceCallback(pending);
+          } else {
+            setIsPkceAuthorizing(false);
+          }
+        }
+      }, 700);
+    } catch {
+      setIsPkceAuthorizing(false);
+      setValidationError('PKCE 보안 코드 생성에 실패했습니다. 브라우저 환경을 확인해주세요');
+    }
+  }, [completePkceCallback]);
+
+  // Listen for postMessage from /callback.html popup
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      if (
+        origin !== window.location.origin &&
+        !origin.endsWith('.run.app') &&
+        !origin.includes('localhost')
+      ) {
+        return;
+      }
+
+      const data = event.data as
+        | { type?: string; code?: string; state?: string; error?: string }
+        | undefined;
+      if (data?.type !== 'LYRICTIFY_SPOTIFY_PKCE_CALLBACK') {
+        return;
+      }
+
+      consumePendingPkceCallback();
+      void completePkceCallback({
+        code: data.code ?? '',
+        state: data.state ?? '',
+        error: data.error ?? '',
+      });
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [completePkceCallback]);
+
+  // Clean up popup watch interval on unmount
+  useEffect(() => {
+    return () => {
+      if (popupWatchTimerRef.current !== null) {
+        window.clearInterval(popupWatchTimerRef.current);
+      }
+    };
+  }, []);
 
   const startPreviewMode = useCallback(() => {
     lyricsAbortRef.current?.abort();
@@ -315,12 +532,15 @@ export default function App() {
 
     setValidationError(null);
     setIsModalOpen(false);
+    setIsPickerOpen(false);
     setModalInitialTab('display');
     setIsPreviewMode(true);
     setTrack(PREVIEW_TRACK);
     setIsPlainLyrics(false);
     setLyricSource('LRCLIB · 미리보기');
     setLyrics(parseLRC(PREVIEW_LRC));
+    setLyricCandidates(PREVIEW_CANDIDATES);
+    setSelectedCandidateId(PREVIEW_CANDIDATES[0].id);
     setStatus('lyrics_ready');
     setIsPlaying(true);
     setShowControls(true);
@@ -328,33 +548,80 @@ export default function App() {
     setAnchorTimestamp(performance.now());
   }, []);
 
+  const handleSelectCandidate = useCallback(
+    (candidate: LrcLibCandidate, mode: 'synced' | 'plain') => {
+      const usePlain = mode === 'plain' || !candidate.syncedLyrics;
+      const rawText = usePlain
+        ? (candidate.plainLyrics ?? candidate.syncedLyrics ?? '')
+        : (candidate.syncedLyrics ?? '');
+      const parsed = usePlain ? parsePlainLyrics(rawText) : parseLRC(rawText);
+      if (parsed.length === 0) return;
+
+      setIsPlainLyrics(usePlain);
+      setLyricSource(
+        isPreviewRef.current
+          ? usePlain
+            ? '미리보기 (일반 가사)'
+            : 'LRCLIB · 미리보기'
+          : usePlain
+            ? 'LRCLIB (일반 가사)'
+            : 'LRCLIB'
+      );
+      setLyrics(parsed);
+      setSelectedCandidateId(candidate.id);
+      setStatus('lyrics_ready');
+      setIsPickerOpen(false);
+    },
+    []
+  );
+
   const handleDisconnectSpotify = useCallback(() => {
     lyricsAbortRef.current?.abort();
     clearStoredCredentials();
+    clearPkceSession();
     accessTokenRef.current = '';
     currentSongIdRef.current = '';
     setCredentials({ clientId: '', clientSecret: '', refreshToken: '' });
     setValidationError(null);
+    setIsPkceAuthorizing(false);
 
     if (!isPreviewRef.current) {
       setIsPlaying(false);
       setShowControls(false);
       setTrack(null);
       setLyrics([]);
+      setLyricCandidates([]);
+      setSelectedCandidateId(null);
       setStatus('initial_empty');
     }
   }, []);
 
-  // Initial boot: either ?autostart=1 preview or saved Spotify refresh token
+  // Initial boot: PKCE standalone callback, ?autostart=1 preview, or saved Spotify refresh token
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const urlCode = params.get('code') ?? '';
+    const urlState = params.get('state') ?? '';
+    const urlError = params.get('error') ?? '';
+
+    if ((urlCode || urlError) && loadPkceSession()) {
+      window.history.replaceState({}, '', window.location.pathname);
+      void completePkceCallback({ code: urlCode, state: urlState, error: urlError });
+      return;
+    }
+
+    const pendingCallback = consumePendingPkceCallback();
+    if (pendingCallback && (pendingCallback.code || pendingCallback.error) && loadPkceSession()) {
+      void completePkceCallback(pendingCallback);
+      return;
+    }
+
     if (params.get('autostart') === '1') {
       startPreviewMode();
       return;
     }
 
     const saved = loadStoredCredentials();
-    if (saved.clientId && saved.clientSecret && saved.refreshToken) {
+    if (saved.clientId && saved.refreshToken) {
       void connectSpotify(saved);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -384,8 +651,8 @@ export default function App() {
       refreshToken: nextCreds.refreshToken.trim(),
     };
 
-    if (!trimmed.clientId || !trimmed.clientSecret || !trimmed.refreshToken) {
-      setValidationError('Client ID, Client Secret, Refresh Token을 모두 입력해주세요');
+    if (!trimmed.clientId || !trimmed.refreshToken) {
+      setValidationError('Client ID와 Refresh Token을 입력해주세요');
       return;
     }
 
@@ -506,18 +773,19 @@ export default function App() {
     });
   }, []);
 
-  const handleUpdateBooleanSetting = (key: BooleanSettingKey, value: boolean) => {
+  const handleUpdateBooleanSetting = useCallback((key: BooleanSettingKey, value: boolean) => {
     saveBooleanSetting(key, value);
     setSettings((prev) => ({ ...prev, [key]: value }));
-  };
+  }, []);
 
   const handleResetSingleSetting = useCallback((key: keyof UISettings) => {
     setSettings((prev) => {
       const next = resetSingleSetting(prev, key);
-      if (key === 'keepAwake' || key === 'hideControls' || key === 'ambientLight') {
-        saveBooleanSetting(key, next[key]);
+      const nextVal = next[key];
+      if (typeof nextVal === 'boolean') {
+        saveBooleanSetting(key as BooleanSettingKey, nextVal);
       } else {
-        saveNumericSetting(key, next[key]);
+        saveNumericSetting(key as NumericSettingKey, nextVal);
       }
       return next;
     });
@@ -546,9 +814,9 @@ export default function App() {
     }, 150);
   }, []);
 
-  // Convenient keyboard shortcuts when modal is closed: Space (Play/Pause), [ / ] / \ (Sync), F (Fullscreen)
+  // Convenient keyboard shortcuts when modals are closed: Space (Play/Pause), [ / ] / \ (Sync), F (Fullscreen)
   useEffect(() => {
-    if (isModalOpen) return;
+    if (isModalOpen || isPickerOpen) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -607,7 +875,14 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isModalOpen, showControls, handleTogglePlayPause, toggleFullscreen, showTemporarySyncFeedback]);
+  }, [
+    isModalOpen,
+    isPickerOpen,
+    showControls,
+    handleTogglePlayPause,
+    toggleFullscreen,
+    showTemporarySyncFeedback,
+  ]);
 
   const openSettingsModal = (preferredTab?: SettingsTab) => {
     setValidationError(null);
@@ -622,46 +897,62 @@ export default function App() {
   };
 
   const mediaControlsVisible =
-    showControls && (!isModalOpen || draggingSliderKey === 'uiScale');
+    showControls && !isPickerOpen && (!isModalOpen || draggingSliderKey === 'uiScale');
 
   return (
-    <div className="relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] pb-20">
-      {/* Album Art Static Blurred Base */}
+    <div
+      className={`relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] pb-24 ${
+        isIdleHidden ? 'cursor-none' : ''
+      }`}
+    >
+      {/* Album Art Static Blurred Base (dims down when Ambient Light is OFF so toggling is immediately clear) */}
       <div
         aria-hidden="true"
-        className={`album-art-backdrop pointer-events-none absolute -inset-[12%] bg-cover bg-center blur-[64px] brightness-[0.62] saturate-[1.55] z-0 transition-opacity duration-700 ${
+        className={`album-art-backdrop pointer-events-none absolute -inset-[12%] bg-cover bg-center blur-[64px] z-0 transition-[opacity,filter] duration-700 ${
           track?.albumArtUrl ? 'opacity-100' : 'opacity-0'
+        } ${
+          settings.ambientLight
+            ? 'brightness-[0.48] saturate-[1.55]'
+            : 'brightness-[0.30] saturate-[1.10]'
         }`}
       />
 
-      {/* Dominant-Color Pulsing Ambient Light Stage */}
+      {/* Dominant-Color Pulsing Ambient Light Stage (Screen-blended living color auras) */}
       <div
         aria-hidden="true"
         data-testid="ambient-light-stage"
         data-active={settings.ambientLight ? 'true' : 'false'}
-        className={`ambient-light-stage pointer-events-none absolute -inset-[16%] blur-[48px] z-0 ${
+        className={`ambient-light-stage pointer-events-none absolute -inset-[18%] blur-[44px] z-0 ${
           settings.ambientLight ? 'opacity-100' : 'opacity-0'
         } ${isPlaying ? '' : 'ambient-paused'}`}
       >
         <div className="ambient-lobe-primary absolute inset-0" />
         <div className="ambient-lobe-secondary absolute inset-0" />
+        <div className="ambient-lobe-bloom absolute inset-0" />
       </div>
 
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f10]/35 via-[#0f0f10]/15 to-[#0f0f10]/65 z-0"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f10]/30 via-transparent to-[#0f0f10]/55 z-0"
       />
 
       <Header
         track={track}
         isFullscreen={isFullscreen}
+        isIdleHidden={isIdleHidden}
+        splitLayout={settings.splitLayout}
         syncFeedback={syncFeedback}
+        onToggleSplitLayout={() =>
+          handleUpdateBooleanSetting('splitLayout', !settings.splitLayout)
+        }
+        onOpenLyricPicker={() => setIsPickerOpen(true)}
         onToggleFullscreen={toggleFullscreen}
         onOpenSettings={() => openSettingsModal()}
       />
 
       <LyricsViewport
         status={status}
+        track={track}
         lyrics={lyrics}
         isPlainLyrics={isPlainLyrics}
         lyricSource={lyricSource}
@@ -672,6 +963,7 @@ export default function App() {
         settings={settings}
         draggingSliderKey={draggingSliderKey}
         onSeekLyric={handleSeekLyric}
+        onOpenLyricPicker={() => setIsPickerOpen(true)}
         onOpenSettings={() => openSettingsModal('spotify')}
         onStartPreview={startPreviewMode}
       />
@@ -679,11 +971,25 @@ export default function App() {
       <MediaControls
         visible={mediaControlsVisible}
         hiddenBySetting={settings.hideControls}
+        isIdleHidden={isIdleHidden}
         isPlaying={isPlaying}
         isPreviewMode={isPreviewMode}
+        durationMs={track?.durationMs ?? PREVIEW_DURATION_MS}
+        progressAnchorMs={progressAnchorMs}
+        anchorTimestamp={anchorTimestamp}
+        onSeek={handleSeekLyric}
         onPrevious={handlePrevious}
         onPlayPause={handleTogglePlayPause}
         onNext={handleNext}
+      />
+
+      <LyricPickerModal
+        isOpen={isPickerOpen}
+        track={track}
+        initialCandidates={lyricCandidates}
+        selectedCandidateId={selectedCandidateId}
+        onSelectCandidate={handleSelectCandidate}
+        onClose={() => setIsPickerOpen(false)}
       />
 
       <SettingsModal
@@ -691,11 +997,13 @@ export default function App() {
         initialTab={modalInitialTab}
         viewerStatus={status}
         isPreviewMode={isPreviewMode}
+        isPkceAuthorizing={isPkceAuthorizing}
         credentials={credentials}
         settings={settings}
         isTransparentDrag={isTransparentDrag}
         validationError={validationError}
         onClose={() => setIsModalOpen(false)}
+        onStartPkceConnect={(cid) => void handleStartPkceConnect(cid)}
         onSaveAndConnect={handleSaveAndConnect}
         onDisconnectSpotify={handleDisconnectSpotify}
         onStartPreview={startPreviewMode}
