@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Disc3 } from 'lucide-react';
+import { Disc3, ListMusic } from 'lucide-react';
 import { LyricLine, NumericSettingKey, TrackMetadata, UISettings, ViewerStatus } from '../types/lyrics';
+import { MarqueeText } from './MarqueeText';
+import { MediaControls } from './MediaControls';
 import {
   INTERLUDE_MIN_GAP_MS,
   computeInterludeState,
@@ -15,13 +17,19 @@ interface LyricsViewportProps {
   lyrics: LyricLine[];
   isPlainLyrics: boolean;
   lyricSource: string;
+  isDesktopSplitActive: boolean;
+  showControls: boolean;
   isPlaying: boolean;
   isPreviewMode: boolean;
+  isIdleHidden: boolean;
   progressAnchorMs: number;
   anchorTimestamp: number;
   settings: UISettings;
   draggingSliderKey: NumericSettingKey | null;
   onSeekLyric: (timeMs: number) => void;
+  onPrevious: () => void;
+  onPlayPause: () => void;
+  onNext: () => void;
   onOpenLyricPicker: () => void;
   onOpenSettings: () => void;
   onStartPreview: () => void;
@@ -33,13 +41,19 @@ export function LyricsViewport({
   lyrics,
   isPlainLyrics,
   lyricSource,
+  isDesktopSplitActive,
+  showControls,
   isPlaying,
   isPreviewMode,
+  isIdleHidden,
   progressAnchorMs,
   anchorTimestamp,
   settings,
   draggingSliderKey,
   onSeekLyric,
+  onPrevious,
+  onPlayPause,
+  onNext,
   onOpenLyricPicker,
   onOpenSettings,
   onStartPreview,
@@ -93,7 +107,8 @@ export function LyricsViewport({
   const targetManualOffsetRef = useRef<number>(0);
   const manualOffsetRef = useRef<number>(0);
   const plainScrollYRef = useRef<number>(0);
-  const lastManualTransformRef = useRef<string>('translateY(0px)');
+  const lastManualTransformRef = useRef<string>('translate3d(0, 0px, 0)');
+  const lastWrapperSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const isTouchDraggingRef = useRef<boolean>(false);
   const touchStartYRef = useRef<number>(0);
   const touchStartBaseRef = useRef<number>(0);
@@ -144,7 +159,11 @@ export function LyricsViewport({
         isActive = computed.isActive;
       }
 
-      const nextFilter = blurPx <= 0.05 ? 'none' : `blur(${blurPx}px)`;
+      // Keep blur(0px) on the active synced line so transitioning blur(1.25px) <-> blur(0px) never tears down Skia's FilterEffect texture 500ms later
+      const keepActiveFilterSurface =
+        isActive && !plain && !forceClearBlur && currentSettings.blurAmount > 0;
+      const nextFilter =
+        blurPx <= 0.05 ? (keepActiveFilterSurface ? 'blur(0px)' : 'none') : `blur(${blurPx}px)`;
       const nextOpacity = String(opacity);
 
       if (el.style.filter !== nextFilter) {
@@ -218,14 +237,15 @@ export function LyricsViewport({
         const lineEl = lineElsRef.current[activeIdx];
         const anchorHeight = lineEl ? lineEl.clientHeight : activeWrap.clientHeight;
         const translateY = restingOffsetTop - wrapper.clientHeight * vertRatio + anchorHeight / 2;
+        const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
         if (introWrapRef.current) {
           introWrapRef.current.style.setProperty('--delay', '0s');
-          introWrapRef.current.style.transform = `translateY(-${translateY}px)`;
+          introWrapRef.current.style.transform = targetTransform;
         }
         for (const wrap of wrapElsRef.current) {
           if (!wrap) continue;
           wrap.style.setProperty('--delay', '0s');
-          wrap.style.transform = `translateY(-${translateY}px)`;
+          wrap.style.transform = targetTransform;
         }
       }
     }
@@ -242,17 +262,17 @@ export function LyricsViewport({
     isManualScrollingRef.current = false;
 
     if (manualScrollRef.current) {
-      manualScrollRef.current.style.transform = 'translateY(0px)';
-      lastManualTransformRef.current = 'translateY(0px)';
+      manualScrollRef.current.style.transform = 'translate3d(0, 0px, 0)';
+      lastManualTransformRef.current = 'translate3d(0, 0px, 0)';
     }
     if (introWrapRef.current) {
       introWrapRef.current.style.setProperty('--delay', '0s');
-      introWrapRef.current.style.transform = 'translateY(0px)';
+      introWrapRef.current.style.transform = 'translate3d(0, 0px, 0)';
     }
     for (const wrap of wrapElsRef.current) {
       if (wrap) {
         wrap.style.setProperty('--delay', '0s');
-        wrap.style.transform = 'translateY(0px)';
+        wrap.style.transform = 'translate3d(0, 0px, 0)';
       }
     }
 
@@ -269,7 +289,7 @@ export function LyricsViewport({
     settings.lineHeight,
     settings.margin,
     settings.blurAmount,
-    settings.splitLayout,
+    isDesktopSplitActive,
     draggingSliderKey,
     alignLinesImmediately,
     applyLineVisualStyles,
@@ -277,20 +297,33 @@ export function LyricsViewport({
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
-    const content = contentRef.current;
-    if (!wrapper || !content || typeof ResizeObserver === 'undefined') {
+    if (!wrapper || typeof ResizeObserver === 'undefined') {
       const onResize = () => alignLinesImmediately();
       window.addEventListener('resize', onResize);
       return () => window.removeEventListener('resize', onResize);
     }
 
+    lastWrapperSizeRef.current = {
+      w: wrapper.clientWidth,
+      h: wrapper.clientHeight,
+    };
+
+    // Observe only the viewport wrapper (never #lyrics-content, whose height animates during interlude 0fr<->1fr transitions)
     const observer = new ResizeObserver(() => {
+      const nextW = wrapper.clientWidth;
+      const nextH = wrapper.clientHeight;
+      if (
+        nextW === lastWrapperSizeRef.current.w &&
+        nextH === lastWrapperSizeRef.current.h
+      ) {
+        return;
+      }
+      lastWrapperSizeRef.current = { w: nextW, h: nextH };
       alignLinesImmediately();
     });
     observer.observe(wrapper);
-    observer.observe(content);
     return () => observer.disconnect();
-  }, [status, settings.splitLayout, alignLinesImmediately]);
+  }, [status, isDesktopSplitActive, alignLinesImmediately]);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -379,7 +412,7 @@ export function LyricsViewport({
           plainScrollYRef.current += currentSettings.plainSpeed * (deltaTime / 1000);
         }
         const roundedPlain = Math.round(plainScrollYRef.current * 100) / 100;
-        const nextTransform = `translateY(${-roundedPlain}px)`;
+        const nextTransform = `translate3d(0, ${-roundedPlain}px, 0)`;
         if (manualScrollRef.current && lastManualTransformRef.current !== nextTransform) {
           manualScrollRef.current.style.transform = nextTransform;
           lastManualTransformRef.current = nextTransform;
@@ -398,7 +431,7 @@ export function LyricsViewport({
         }
 
         const roundedManual = Math.round(manualOffsetRef.current * 100) / 100;
-        const nextTransform = `translateY(${-roundedManual}px)`;
+        const nextTransform = `translate3d(0, ${-roundedManual}px, 0)`;
         if (manualScrollRef.current && lastManualTransformRef.current !== nextTransform) {
           manualScrollRef.current.style.transform = nextTransform;
           lastManualTransformRef.current = nextTransform;
@@ -421,12 +454,12 @@ export function LyricsViewport({
             activeIndexRef.current = -1;
             if (introWrapRef.current) {
               introWrapRef.current.style.setProperty('--delay', '0s');
-              introWrapRef.current.style.transform = 'translateY(0px)';
+              introWrapRef.current.style.transform = 'translate3d(0, 0px, 0)';
             }
             for (const wrap of wrapElsRef.current) {
               if (wrap) {
                 wrap.style.setProperty('--delay', '0s');
-                wrap.style.transform = 'translateY(0px)';
+                wrap.style.transform = 'translate3d(0, 0px, 0)';
               }
             }
             applyLineVisualStyles(-1);
@@ -440,12 +473,12 @@ export function LyricsViewport({
               activeIndexRef.current = -1;
               if (introWrapRef.current) {
                 introWrapRef.current.style.setProperty('--delay', '0s');
-                introWrapRef.current.style.transform = 'translateY(0px)';
+                introWrapRef.current.style.transform = 'translate3d(0, 0px, 0)';
               }
               for (const wrap of wrapElsRef.current) {
                 if (wrap) {
                   wrap.style.setProperty('--delay', '0s');
-                  wrap.style.transform = 'translateY(0px)';
+                  wrap.style.transform = 'translate3d(0, 0px, 0)';
                 }
               }
               applyLineVisualStyles(-1);
@@ -468,10 +501,11 @@ export function LyricsViewport({
                 const elementCenter = (lineEl ? lineEl.clientHeight : activeWrap.clientHeight) / 2;
                 const targetCenter = wrapper.clientHeight * (currentSettings.vertPos / 100);
                 const translateY = restingOffsetTop - targetCenter + elementCenter;
+                const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
 
                 if (introWrapRef.current) {
                   introWrapRef.current.style.setProperty('--delay', '0s');
-                  introWrapRef.current.style.transform = `translateY(-${translateY}px)`;
+                  introWrapRef.current.style.transform = targetTransform;
                 }
 
                 const wraps = wrapElsRef.current;
@@ -485,7 +519,7 @@ export function LyricsViewport({
                     const delay = Math.min(distance, 15) * currentSettings.waveDelay;
                     wrap.style.setProperty('--delay', `${delay}s`);
                   }
-                  wrap.style.transform = `translateY(-${translateY}px)`;
+                  wrap.style.transform = targetTransform;
                 }
               }
             }
@@ -521,16 +555,14 @@ export function LyricsViewport({
     }
   };
 
-  const showSplitArtworkPanel = Boolean(settings.splitLayout && track);
-
   return (
-    <div className="relative z-10 flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center lg:gap-12 px-6 sm:px-12">
-      {/* Wide-Screen Dual Split View Left Artwork Panel */}
-      {showSplitArtworkPanel && track && (
+    <div className="relative z-10 flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center lg:gap-14 xl:gap-16 px-6 sm:px-12">
+      {/* Wide-Screen Dual Split View Left Artwork + Inline Apple Music Player Panel */}
+      {isDesktopSplitActive && track && (
         <aside
           aria-label="현재 재생 트랙 정보"
           data-testid="split-view-artwork-panel"
-          className="relative z-20 hidden lg:flex lg:flex-col lg:w-[320px] xl:w-[360px] shrink-0 justify-center pb-14 select-none"
+          className="hud-layer-pinned relative z-20 flex flex-col w-[320px] xl:w-[356px] shrink-0 justify-center pb-8 select-none"
         >
           {track.albumArtUrl && !splitImgFailed ? (
             <img
@@ -538,33 +570,60 @@ export function LyricsViewport({
               alt={`${track.title} 앨범 커버`}
               referrerPolicy="no-referrer"
               onError={() => setSplitImgFailed(true)}
-              className="w-72 h-72 xl:w-80 xl:h-80 rounded-2xl object-cover border border-[var(--border-hairline)] shadow-2xl"
+              className="w-full aspect-square rounded-2xl object-cover border border-white/10 shadow-2xl"
             />
           ) : (
-            <div className="w-72 h-72 xl:w-80 xl:h-80 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center">
+            <div className="w-full aspect-square rounded-2xl bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center">
               <Disc3 size={48} strokeWidth={1.5} className="text-[var(--text-muted)]" />
             </div>
           )}
 
-          <div className="mt-6 space-y-1.5 max-w-80">
-            <h2 className="text-xl font-semibold text-[var(--text-primary)] leading-snug break-keep">
-              {track.title}
-            </h2>
-            <p className="text-sm text-[var(--text-secondary)] truncate">{track.artist}</p>
+          {/* Track Title & Artist (always visible, smooth sliding + edge fade when long) + Subtle Circular Lyric Picker Trigger (fades on idle) */}
+          <div className="mt-5 flex items-center justify-between gap-3 w-full">
+            <div className="min-w-0 flex-1">
+              <MarqueeText
+                as="h2"
+                text={track.title}
+                testId="split-track-title"
+                className="text-[17px] xl:text-lg font-semibold text-white leading-snug"
+              />
+              <MarqueeText
+                as="p"
+                text={track.artist}
+                testId="split-track-artist"
+                className="text-[14px] xl:text-[15px] text-white/65 mt-0.5"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={onOpenLyricPicker}
+              aria-label="가사 변경"
+              title={lyricSource ? `가사 변경 · 출처: ${lyricSource}` : '가사 변경'}
+              className={`w-8 h-8 rounded-full bg-white/12 hover:bg-white/20 text-white/80 hover:text-white flex items-center justify-center shrink-0 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-200 cursor-pointer focus-visible:outline-2 focus-visible:outline-white ${
+                isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
+              }`}
+            >
+              <ListMusic size={15} strokeWidth={1.6} />
+            </button>
           </div>
 
-          {lyricSource && (
-            <div className="mt-4 flex items-center gap-2.5 text-xs text-[var(--text-muted)]">
-              <span className="font-mono-tech">출처 · {lyricSource}</span>
-              <button
-                type="button"
-                onClick={onOpenLyricPicker}
-                className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] underline underline-offset-4 cursor-pointer"
-              >
-                가사 변경
-              </button>
-            </div>
-          )}
+          {/* Inline Progress Scrubber & Transport Controls (No Repeat / Shuffle / Volume) */}
+          <MediaControls
+            variant="split"
+            visible={showControls}
+            hiddenBySetting={settings.hideControls}
+            isIdleHidden={isIdleHidden}
+            isPlaying={isPlaying}
+            isPreviewMode={isPreviewMode}
+            durationMs={track.durationMs || 45000}
+            progressAnchorMs={progressAnchorMs}
+            anchorTimestamp={anchorTimestamp}
+            onSeek={onSeekLyric}
+            onPrevious={onPrevious}
+            onPlayPause={onPlayPause}
+            onNext={onNext}
+          />
         </aside>
       )}
 
@@ -578,8 +637,8 @@ export function LyricsViewport({
           }
         }}
         className={`lyrics-mask relative z-10 flex-1 min-h-0 h-full overflow-y-clip overflow-x-visible ${
-          showSplitArtworkPanel
-            ? '-mx-8 px-8 lg:-ml-14 lg:pl-16 lg:-mr-10 lg:pr-10'
+          isDesktopSplitActive
+            ? '-mx-8 px-8 lg:-ml-12 lg:pl-14 lg:-mr-10 lg:pr-10'
             : '-mx-8 px-8 sm:-mx-6 sm:px-12 md:-mx-4 md:px-16'
         }`}
       >
@@ -674,7 +733,11 @@ export function LyricsViewport({
                 </div>
               ))}
 
-              <div className="flex items-center gap-3 mt-16 mb-[32vh]">
+              <div
+                className={`flex items-center gap-3 mt-16 mb-[32vh] transition-opacity duration-300 ${
+                  isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                }`}
+              >
                 {lyricSource && (
                   <span className="font-mono-tech text-xs text-[var(--text-muted)]">
                     출처 · {lyricSource}

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -38,6 +38,7 @@ interface SettingsModalProps {
   isPkceAuthorizing: boolean;
   credentials: SpotifyCredentials;
   settings: UISettings;
+  draggingSliderKey: NumericSettingKey | null;
   isTransparentDrag: boolean;
   validationError: string | null;
   onClose: () => void;
@@ -92,6 +93,7 @@ interface DraftNumberInputProps {
   min: number;
   max: number;
   step: number;
+  isActiveDrag: boolean;
   onCommit: (next: number) => void;
 }
 
@@ -102,6 +104,7 @@ function DraftNumberInput({
   min,
   max,
   step,
+  isActiveDrag,
   onCommit,
 }: DraftNumberInputProps) {
   const [draft, setDraft] = useState<string>(String(value));
@@ -148,7 +151,11 @@ function DraftNumberInput({
         }
       }}
       onChange={(e) => setDraft(e.target.value)}
-      className="no-spinner font-mono-tech w-16 h-8 px-2 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-[6px] text-right text-xs text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none shrink-0 hide-on-drag transition-colors duration-150"
+      className={`no-spinner font-mono-tech w-16 h-8 px-2 rounded-[6px] text-right text-xs text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none shrink-0 transition-[background-color,border-color,box-shadow] duration-150 ${
+        isActiveDrag
+          ? 'bg-[var(--bg-deepest)]/95 border border-[var(--accent)]/70 shadow-lg'
+          : 'bg-[var(--bg-deepest)] border border-[var(--border-hairline)]'
+      }`}
     />
   );
 }
@@ -156,6 +163,8 @@ function DraftNumberInput({
 interface SliderRowProps {
   settingKey: NumericSettingKey;
   value: number;
+  isActiveDrag: boolean;
+  isDimmedByOtherDrag: boolean;
   onUpdate: (key: NumericSettingKey, value: number) => void;
   onResetSingle: (key: keyof UISettings) => void;
   onDragStart: (key: NumericSettingKey) => void;
@@ -164,6 +173,8 @@ interface SliderRowProps {
 function SliderSettingRow({
   settingKey,
   value,
+  isActiveDrag,
+  isDimmedByOtherDrag,
   onUpdate,
   onResetSingle,
   onDragStart,
@@ -176,7 +187,12 @@ function SliderSettingRow({
   const isSyncOffset = settingKey === 'syncOffset';
 
   return (
-    <div className="flex items-center gap-3 h-9">
+    <div
+      data-testid={`slider-row-${settingKey}`}
+      className={`flex items-center gap-3 h-9 transition-opacity duration-150 ${
+        isDimmedByOtherDrag ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      }`}
+    >
       <label
         htmlFor={sliderId}
         onDoubleClick={() => onResetSingle(settingKey)}
@@ -215,6 +231,7 @@ function SliderSettingRow({
           max={constraint.max}
           step={constraint.step}
           value={value}
+          onPointerDown={() => onDragStart(settingKey)}
           onMouseDown={() => onDragStart(settingKey)}
           onTouchStart={() => onDragStart(settingKey)}
           onChange={(e) => {
@@ -237,6 +254,7 @@ function SliderSettingRow({
         min={constraint.min}
         max={constraint.max}
         step={constraint.step}
+        isActiveDrag={isActiveDrag}
         onCommit={(next) => onUpdate(settingKey, next)}
       />
     </div>
@@ -302,6 +320,7 @@ export function SettingsModal({
   isPkceAuthorizing,
   credentials,
   settings,
+  draggingSliderKey,
   isTransparentDrag,
   validationError,
   onClose,
@@ -333,8 +352,14 @@ export function SettingsModal({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const [copiedUri, setCopiedUri] = useState(false);
+  const isPressingSliderRef = useRef(false);
 
   const redirectUri = getSpotifyRedirectUri();
+
+  const handleRowDragStart = (key: NumericSettingKey) => {
+    isPressingSliderRef.current = true;
+    onSliderDragStart(key);
+  };
 
   useLayoutEffect(() => {
     if (isOpen) {
@@ -371,19 +396,29 @@ export function SettingsModal({
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (!isTransparentDrag) return;
+    if (!isOpen) {
+      isPressingSliderRef.current = false;
+      return;
+    }
     const handleRelease = () => {
-      onSliderDragEnd();
+      if (isPressingSliderRef.current || isTransparentDrag || draggingSliderKey !== null) {
+        isPressingSliderRef.current = false;
+        onSliderDragEnd();
+      }
     };
+    window.addEventListener('pointerup', handleRelease);
+    window.addEventListener('pointercancel', handleRelease);
     window.addEventListener('mouseup', handleRelease);
     window.addEventListener('touchend', handleRelease);
     window.addEventListener('touchcancel', handleRelease);
     return () => {
+      window.removeEventListener('pointerup', handleRelease);
+      window.removeEventListener('pointercancel', handleRelease);
       window.removeEventListener('mouseup', handleRelease);
       window.removeEventListener('touchend', handleRelease);
       window.removeEventListener('touchcancel', handleRelease);
     };
-  }, [isTransparentDrag, onSliderDragEnd]);
+  }, [isOpen, isTransparentDrag, draggingSliderKey, onSliderDragEnd]);
 
   if (!isOpen) return null;
 
@@ -661,9 +696,13 @@ export function SettingsModal({
                     key={key}
                     settingKey={key}
                     value={settings[key]}
+                    isActiveDrag={isTransparentDrag && draggingSliderKey === key}
+                    isDimmedByOtherDrag={
+                      isTransparentDrag && draggingSliderKey !== null && draggingSliderKey !== key
+                    }
                     onUpdate={onUpdateNumericSetting}
                     onResetSingle={onResetSingleSetting}
-                    onDragStart={onSliderDragStart}
+                    onDragStart={handleRowDragStart}
                   />
                 ))}
               </section>
@@ -712,9 +751,15 @@ export function SettingsModal({
                         key={key}
                         settingKey={key}
                         value={settings[key]}
+                        isActiveDrag={isTransparentDrag && draggingSliderKey === key}
+                        isDimmedByOtherDrag={
+                          isTransparentDrag &&
+                          draggingSliderKey !== null &&
+                          draggingSliderKey !== key
+                        }
                         onUpdate={onUpdateNumericSetting}
                         onResetSingle={onResetSingleSetting}
-                        onDragStart={onSliderDragStart}
+                        onDragStart={handleRowDragStart}
                       />
                     ))}
                   </div>

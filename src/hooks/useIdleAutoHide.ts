@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function useIdleAutoHide(enabled: boolean, timeoutMs = 3500): boolean {
   const [isIdle, setIsIdle] = useState<boolean>(false);
+  const isIdleRef = useRef<boolean>(false);
+  isIdleRef.current = isIdle;
 
   useEffect(() => {
     if (!enabled) {
-      setIsIdle(false);
+      if (isIdleRef.current) {
+        isIdleRef.current = false;
+        setIsIdle(false);
+      }
       return;
     }
 
@@ -16,12 +21,16 @@ export function useIdleAutoHide(enabled: boolean, timeoutMs = 3500): boolean {
         window.clearTimeout(timerId);
       }
       timerId = window.setTimeout(() => {
+        isIdleRef.current = true;
         setIsIdle(true);
       }, timeoutMs);
     };
 
     const handleActivity = () => {
-      setIsIdle(false);
+      if (isIdleRef.current) {
+        isIdleRef.current = false;
+        setIsIdle(false);
+      }
       scheduleIdle();
     };
 

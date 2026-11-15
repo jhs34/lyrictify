@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildFallbackAmbientPalette,
+  computeAmbientMeshPixels,
+  computeLobePositionsAtPhase,
+  createFineDitherTilePixels,
+  extractAlbumPaletteFromGrid,
+  interleavedGradientNoise,
+} from './ambientMesh';
+import {
   DEFAULT_AMBIENT_RGB,
   DEFAULT_UI_SETTINGS,
   INTERLUDE_HOLD_AFTER_VOCAL_MS,
@@ -12,13 +20,16 @@ import {
   cleanTitle,
   computeInterludeState,
   computeLyricVisualStyle,
+  computeMarqueeMetrics,
   computeTrackProgressMs,
   deriveSecondaryAmbientColor,
   detectActivePreset,
   encodeBasicAuth,
   extractDominantColorFromPixels,
   findActiveLyricIndex,
+  formatCompactTimeMs,
   formatDurationMs,
+  formatRemainingTimeMs,
   formatSyncOffsetLabel,
   normalizeLrcLibCandidates,
   parseLRC,
@@ -27,6 +38,7 @@ import {
   parseTitleAndVersion,
   resetSingleSetting,
   selectBestLyricsFromCandidates,
+  shouldResyncPlaybackClock,
   stepSyncOffset,
 } from './lyrics';
 import {
@@ -268,7 +280,9 @@ test('parsePastedCredentials extracts credentials from JSON, .env key=value, and
 
 test('resetSingleSetting restores only the targeted setting key to its default value', () => {
   assert.equal(DEFAULT_UI_SETTINGS.vertPos, 50);
-  assert.equal(UI_PRESETS[0].patch.vertPos, 50);
+  for (const preset of UI_PRESETS) {
+    assert.equal(preset.patch.vertPos, 50);
+  }
   assert.equal(DEFAULT_UI_SETTINGS.ambientLight, true);
   assert.equal(DEFAULT_UI_SETTINGS.splitLayout, true);
   assert.equal(DEFAULT_UI_SETTINGS.autoHideHud, true);
@@ -314,12 +328,20 @@ test('extractDominantColorFromPixels weights saturated album hues over black bor
   assert.equal(secondary.b >= 0 && secondary.b <= 255, true);
 });
 
-test('formatDurationMs formats millisecond durations as zero-padded MM:SS', () => {
+test('formatDurationMs, formatCompactTimeMs, and formatRemainingTimeMs format elapsed and remaining playback times accurately', () => {
   assert.equal(formatDurationMs(0), '00:00');
   assert.equal(formatDurationMs(45000), '00:45');
   assert.equal(formatDurationMs(213900), '03:33');
   assert.equal(formatDurationMs(-500), '00:00');
   assert.equal(formatDurationMs(Number.NaN), '00:00');
+
+  assert.equal(formatCompactTimeMs(11000), '0:11');
+  assert.equal(formatCompactTimeMs(213900), '3:33');
+  assert.equal(formatCompactTimeMs(-10), '0:00');
+
+  assert.equal(formatRemainingTimeMs(11000, 165000), '-2:34');
+  assert.equal(formatRemainingTimeMs(45000, 45000), '-0:00');
+  assert.equal(formatRemainingTimeMs(50000, 45000), '-0:00');
 });
 
 test('computeInterludeState requires >=10s gaps, waits 5s before appearing, repeats 1800ms cycles, and exits 500ms early', () => {
@@ -428,5 +450,158 @@ test('PKCE helpers match RFC 7636 S256 test vector and resolve Redirect URIs for
   assert.equal(authUrl.includes('code_challenge_method=S256'), true);
   assert.equal(authUrl.includes('client_id=demo_cid'), true);
 });
+
+test('shouldResyncPlaybackClock suppresses <=650ms Spotify poll jitter while immediately syncing seeks, pause/play, and track changes', () => {
+  // Normal 3s poll with 240ms RTT and 280ms Spotify edge lag -> compensated 12120 vs local 12400 (280ms drift <= 650ms) -> DO NOT jump backward
+  const steadyPoll = shouldResyncPlaybackClock({
+    localProgressMs: 12400,
+    remoteProgressMs: 12000,
+    rttMs: 240,
+    isPlaying: true,
+    wasPlaying: true,
+    trackChanged: false,
+  });
+  assert.deepEqual(steadyPoll, { shouldUpdate: false, nextProgressMs: 12400 });
+
+  // External user seek in Spotify app (local 12400 vs remote 45000) -> resync immediately
+  const externalSeek = shouldResyncPlaybackClock({
+    localProgressMs: 12400,
+    remoteProgressMs: 45000,
+    rttMs: 200,
+    isPlaying: true,
+    wasPlaying: true,
+    trackChanged: false,
+  });
+  assert.deepEqual(externalSeek, { shouldUpdate: true, nextProgressMs: 45100 });
+
+  // Play/pause transition or track change -> always resync
+  const pausedTransition = shouldResyncPlaybackClock({
+    localProgressMs: 12400,
+    remoteProgressMs: 12350,
+    rttMs: 180,
+    isPlaying: false,
+    wasPlaying: true,
+    trackChanged: false,
+  });
+  assert.deepEqual(pausedTransition, { shouldUpdate: true, nextProgressMs: 12350 });
+
+  const newTrack = shouldResyncPlaybackClock({
+    localProgressMs: 210000,
+    remoteProgressMs: 120,
+    rttMs: 200,
+    isPlaying: true,
+    wasPlaying: true,
+    trackChanged: true,
+  });
+  assert.deepEqual(newTrack, { shouldUpdate: true, nextProgressMs: 220 });
+});
+
+test('extractAlbumPaletteFromGrid extracts distinct quadrant hues and computeAmbientMeshPixels applies smooth TPDF dithering without banding steps', () => {
+  const w = 8;
+  const h = 8;
+  const grid = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      if (x < 4 && y < 4) {
+        // Top-left: warm amber
+        grid[idx] = 230;
+        grid[idx + 1] = 150;
+        grid[idx + 2] = 45;
+      } else if (x >= 4 && y < 4) {
+        // Top-right: crimson red
+        grid[idx] = 215;
+        grid[idx + 1] = 42;
+        grid[idx + 2] = 68;
+      } else if (x < 4 && y >= 4) {
+        // Bottom-left: cobalt blue
+        grid[idx] = 40;
+        grid[idx + 1] = 95;
+        grid[idx + 2] = 220;
+      } else {
+        // Bottom-right: deep violet
+        grid[idx] = 135;
+        grid[idx + 1] = 58;
+        grid[idx + 2] = 205;
+      }
+      grid[idx + 3] = 255;
+    }
+  }
+
+  const palette = extractAlbumPaletteFromGrid(grid, w, h);
+  assert.equal(palette.length, 4);
+  assert.equal(palette[0].r > palette[0].b, true);
+  assert.equal(palette[2].b > palette[2].r, true);
+
+  const meshSize = 64;
+  const mesh = computeAmbientMeshPixels(palette, meshSize, 'primary', 101);
+  assert.equal(mesh.length, meshSize * meshSize * 4);
+
+  // Outer perimeter pixels blend smoothly to the dark listening-room floor (~17,17,19 +/- dither)
+  const cornerR = mesh[0];
+  assert.equal(cornerR >= 14 && cornerR <= 21, true);
+  assert.equal(mesh[3], 255);
+
+  // Interior pixels should be brighter than corners and exhibit TPDF dither variance (no long flat quantized runs)
+  const centerIdx = ((meshSize >> 1) * meshSize + (meshSize >> 1)) * 4;
+  assert.equal(mesh[centerIdx] > cornerR + 20 || mesh[centerIdx + 2] > cornerR + 20, true);
+
+  const fallbackMesh = computeAmbientMeshPixels(buildFallbackAmbientPalette(), 32, 'secondary', 202);
+  assert.equal(fallbackMesh.length, 32 * 32 * 4);
+
+  const tile = createFineDitherTilePixels(32, 9001);
+  assert.equal(tile.length, 32 * 32 * 4);
+  let nonZeroAlphaCount = 0;
+  for (let i = 3; i < tile.length; i += 4) {
+    assert.equal(tile[i] <= 6, true);
+    if (tile[i] > 0) nonZeroAlphaCount++;
+  }
+  assert.equal(nonZeroAlphaCount > 100, true);
+});
+
+test('computeMarqueeMetrics disables marquee when text fits and computes right-fade-compensated slide offset when overflowing', () => {
+  assert.deepEqual(computeMarqueeMetrics(120, 160), {
+    isOverflowing: false,
+    slideOffsetPx: 0,
+    durationSec: 0,
+  });
+  assert.deepEqual(computeMarqueeMetrics(161, 160), {
+    isOverflowing: false,
+    slideOffsetPx: 0,
+    durationSec: 0,
+  });
+
+  const overflow = computeMarqueeMetrics(260, 160, 14);
+  assert.equal(overflow.isOverflowing, true);
+  assert.equal(overflow.slideOffsetPx, 114);
+  assert.equal(overflow.durationSec >= 6.5 && overflow.durationSec <= 24, true);
+});
+
+test('interleavedGradientNoise stays strictly within [-0.5, 0.5] and computeLobePositionsAtPhase is C-continuous across rate changes', () => {
+  let minVal = Infinity;
+  let maxVal = -Infinity;
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const v = interleavedGradientNoise(x, y);
+      assert.equal(v >= -0.5 && v <= 0.5, true);
+      if (v < minVal) minVal = v;
+      if (v > maxVal) maxVal = v;
+    }
+  }
+  assert.equal(maxVal - minVal > 0.85, true);
+
+  const pA = computeLobePositionsAtPhase(1.234);
+  const pB = computeLobePositionsAtPhase(1.234 + 0.002);
+  assert.equal(pA.length, 4);
+  for (let i = 0; i < 4; i++) {
+    assert.equal(pA[i].x > 0 && pA[i].x < 1, true);
+    assert.equal(pA[i].y > 0 && pA[i].y < 1, true);
+    const stepDist = Math.hypot(pB[i].x - pA[i].x, pB[i].y - pA[i].y);
+    assert.equal(stepDist < 0.002, true);
+  }
+});
+
+
+
 
 

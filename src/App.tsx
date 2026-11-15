@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import previewAlbumCover from './assets/images/preview_album_cover_1794683829452.jpg';
+import { AmbientBackdrop } from './components/AmbientBackdrop';
 import { Header } from './components/Header';
 import { LyricPickerModal } from './components/LyricPickerModal';
 import { LyricsViewport } from './components/LyricsViewport';
 import { MediaControls } from './components/MediaControls';
 import { SettingsModal } from './components/SettingsModal';
-import { useDominantAlbumColor } from './hooks/useDominantAlbumColor';
 import { useIdleAutoHide } from './hooks/useIdleAutoHide';
 import { useWakeLock } from './hooks/useWakeLock';
 import { searchLyricsOnLrcLib } from './services/lrclib';
@@ -42,6 +42,7 @@ import {
   parseLRC,
   parsePlainLyrics,
   resetSingleSetting,
+  shouldResyncPlaybackClock,
   stepSyncOffset,
 } from './utils/lyrics';
 import {
@@ -109,6 +110,9 @@ export default function App() {
   const [progressAnchorMs, setProgressAnchorMs] = useState<number>(0);
   const [anchorTimestamp, setAnchorTimestamp] = useState<number>(() => performance.now());
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isLargeViewport, setIsLargeViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
+  );
 
   const accessTokenRef = useRef<string>('');
   const currentSongIdRef = useRef<string>('');
@@ -118,9 +122,20 @@ export default function App() {
   const dragReleaseTimerRef = useRef<number | null>(null);
   const syncFeedbackTimerRef = useRef<number | null>(null);
   const popupWatchTimerRef = useRef<number | null>(null);
+  const playbackClockRef = useRef({
+    isPlaying,
+    progressAnchorMs,
+    anchorTimestamp,
+    showControls,
+  });
+  playbackClockRef.current = {
+    isPlaying,
+    progressAnchorMs,
+    anchorTimestamp,
+    showControls,
+  };
 
   useWakeLock(settings.keepAwake);
-  useDominantAlbumColor(track?.albumArtUrl ?? null);
   const isIdleHidden = useIdleAutoHide(
     settings.autoHideHud && !isModalOpen && !isPickerOpen && status === 'lyrics_ready'
   );
@@ -129,14 +144,6 @@ export default function App() {
   useLayoutEffect(() => {
     applySettingsToDocumentCss(settings);
   }, [settings]);
-
-  useLayoutEffect(() => {
-    const nextBg = track?.albumArtUrl ? `url("${track.albumArtUrl}")` : 'none';
-    const rootStyle = document.documentElement.style;
-    if (rootStyle.getPropertyValue('--album-art-image') !== nextBg) {
-      rootStyle.setProperty('--album-art-image', nextBg);
-    }
-  }, [track?.albumArtUrl]);
 
   const showTemporarySyncFeedback = useCallback((offsetMs: number) => {
     if (syncFeedbackTimerRef.current !== null) {
@@ -154,7 +161,7 @@ export default function App() {
     }, 1400);
   }, []);
 
-  // Track Fullscreen API state
+  // Track Fullscreen API state and desktop lg (1024px) split-view breakpoint
   useEffect(() => {
     const syncFsState = () => {
       const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -162,9 +169,16 @@ export default function App() {
     };
     document.addEventListener('fullscreenchange', syncFsState);
     document.addEventListener('webkitfullscreenchange', syncFsState);
+
+    const mql = window.matchMedia('(min-width: 1024px)');
+    const handleMqlChange = (e: MediaQueryListEvent) => setIsLargeViewport(e.matches);
+    setIsLargeViewport(mql.matches);
+    mql.addEventListener('change', handleMqlChange);
+
     return () => {
       document.removeEventListener('fullscreenchange', syncFsState);
       document.removeEventListener('webkitfullscreenchange', syncFsState);
+      mql.removeEventListener('change', handleMqlChange);
     };
   }, []);
 
@@ -258,14 +272,20 @@ export default function App() {
     async (credsForRefresh: SpotifyCredentials) => {
       if (!accessTokenRef.current || isPreviewRef.current) return;
 
+      const reqStart = performance.now();
       const result = await fetchCurrentlyPlaying(accessTokenRef.current);
+      const reqEnd = performance.now();
       if (isPreviewRef.current) return;
 
       if (result.status === 'no_content') {
-        setIsPlaying(false);
+        if (playbackClockRef.current.isPlaying) {
+          setIsPlaying(false);
+        }
         if (!currentSongIdRef.current) {
-          setShowControls(false);
-          setStatus('spotify_idle');
+          if (playbackClockRef.current.showControls) {
+            setShowControls(false);
+          }
+          setStatus((prev) => (prev === 'spotify_idle' ? prev : 'spotify_idle'));
         }
         return;
       }
@@ -288,12 +308,36 @@ export default function App() {
         return;
       }
 
-      setShowControls(true);
-      setIsPlaying(result.isPlaying);
-      setProgressAnchorMs(result.progressMs);
-      setAnchorTimestamp(performance.now());
+      const clock = playbackClockRef.current;
+      const trackChanged = currentSongIdRef.current !== result.track.id;
+      const localProgressMs = computeTrackProgressMs(
+        clock.progressAnchorMs,
+        clock.anchorTimestamp,
+        reqEnd,
+        clock.isPlaying,
+        false
+      );
+      const syncDecision = shouldResyncPlaybackClock({
+        localProgressMs,
+        remoteProgressMs: result.progressMs,
+        rttMs: reqEnd - reqStart,
+        isPlaying: result.isPlaying,
+        wasPlaying: clock.isPlaying,
+        trackChanged,
+      });
 
-      if (currentSongIdRef.current !== result.track.id) {
+      if (!clock.showControls) {
+        setShowControls(true);
+      }
+      if (clock.isPlaying !== result.isPlaying) {
+        setIsPlaying(result.isPlaying);
+      }
+      if (syncDecision.shouldUpdate) {
+        setProgressAnchorMs(syncDecision.nextProgressMs);
+        setAnchorTimestamp(reqEnd);
+      }
+
+      if (trackChanged) {
         currentSongIdRef.current = result.track.id;
         setTrack(result.track);
         void loadLyricsForTrack(result.track);
@@ -911,51 +955,38 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const mediaControlsVisible =
-    showControls && !isPickerOpen && (!isModalOpen || draggingSliderKey === 'uiScale');
+  const isDesktopSplitActive = Boolean(settings.splitLayout && track && isLargeViewport);
 
   return (
     <div
-      className={`relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] pb-24 ${
+      className={`relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] ${
         isIdleHidden ? 'cursor-none' : ''
       }`}
     >
-      {/* Strictly Contained Ambient & Album Backdrop Layer (isolated from modal/accordion layout repaints) */}
-      <div
-        aria-hidden="true"
-        className="ambient-backdrop-container pointer-events-none absolute inset-0 overflow-hidden z-0"
-      >
-        <div
-          className={`album-art-backdrop absolute -inset-[20%] scale-105 bg-cover bg-center blur-[52px] transition-[opacity,filter] duration-700 ${
-            track?.albumArtUrl ? 'opacity-100' : 'opacity-0'
-          } ${
-            settings.ambientLight
-              ? 'brightness-[0.46] saturate-[1.50]'
-              : 'brightness-[0.28] saturate-[1.08]'
-          }`}
-        />
-
-        <div
-          data-testid="ambient-light-stage"
-          data-active={settings.ambientLight ? 'true' : 'false'}
-          className={`ambient-light-stage absolute inset-0 overflow-hidden ${
-            settings.ambientLight ? 'opacity-100' : 'opacity-0'
-          } ${isPlaying ? '' : 'ambient-paused'}`}
-        >
-          <div className="ambient-lobe-primary absolute -inset-[34%]" />
-          <div className="ambient-lobe-secondary absolute -inset-[34%]" />
-          <div className="ambient-lobe-bloom absolute -inset-[28%]" />
-        </div>
-
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0f0f10]/30 via-transparent to-[#0f0f10]/55" />
-      </div>
+      <AmbientBackdrop
+        albumArtUrl={track?.albumArtUrl ?? null}
+        ambientLightEnabled={settings.ambientLight}
+        isPlaying={isPlaying}
+      />
 
       <Header
         track={track}
+        isDesktopSplitActive={isDesktopSplitActive}
         isFullscreen={isFullscreen}
         isIdleHidden={isIdleHidden}
         splitLayout={settings.splitLayout}
         syncFeedback={syncFeedback}
+        showControls={showControls}
+        hideControls={settings.hideControls}
+        isPlaying={isPlaying}
+        isPreviewMode={isPreviewMode}
+        durationMs={track?.durationMs ?? PREVIEW_DURATION_MS}
+        progressAnchorMs={progressAnchorMs}
+        anchorTimestamp={anchorTimestamp}
+        onSeek={handleSeekLyric}
+        onPrevious={handlePrevious}
+        onPlayPause={handleTogglePlayPause}
+        onNext={handleNext}
         onToggleSplitLayout={() =>
           handleUpdateBooleanSetting('splitLayout', !settings.splitLayout)
         }
@@ -970,32 +1001,41 @@ export default function App() {
         lyrics={lyrics}
         isPlainLyrics={isPlainLyrics}
         lyricSource={lyricSource}
+        isDesktopSplitActive={isDesktopSplitActive}
+        showControls={showControls}
         isPlaying={isPlaying}
         isPreviewMode={isPreviewMode}
+        isIdleHidden={isIdleHidden}
         progressAnchorMs={progressAnchorMs}
         anchorTimestamp={anchorTimestamp}
         settings={settings}
         draggingSliderKey={draggingSliderKey}
         onSeekLyric={handleSeekLyric}
+        onPrevious={handlePrevious}
+        onPlayPause={handleTogglePlayPause}
+        onNext={handleNext}
         onOpenLyricPicker={() => setIsPickerOpen(true)}
         onOpenSettings={() => openSettingsModal('spotify')}
         onStartPreview={startPreviewMode}
       />
 
-      <MediaControls
-        visible={mediaControlsVisible}
-        hiddenBySetting={settings.hideControls}
-        isIdleHidden={isIdleHidden}
-        isPlaying={isPlaying}
-        isPreviewMode={isPreviewMode}
-        durationMs={track?.durationMs ?? PREVIEW_DURATION_MS}
-        progressAnchorMs={progressAnchorMs}
-        anchorTimestamp={anchorTimestamp}
-        onSeek={handleSeekLyric}
-        onPrevious={handlePrevious}
-        onPlayPause={handleTogglePlayPause}
-        onNext={handleNext}
-      />
+      {!isDesktopSplitActive && track && (
+        <MediaControls
+          variant="landscape-dock"
+          visible={showControls}
+          hiddenBySetting={settings.hideControls}
+          isIdleHidden={isIdleHidden}
+          isPlaying={isPlaying}
+          isPreviewMode={isPreviewMode}
+          durationMs={track.durationMs || PREVIEW_DURATION_MS}
+          progressAnchorMs={progressAnchorMs}
+          anchorTimestamp={anchorTimestamp}
+          onSeek={handleSeekLyric}
+          onPrevious={handlePrevious}
+          onPlayPause={handleTogglePlayPause}
+          onNext={handleNext}
+        />
+      )}
 
       <LyricPickerModal
         isOpen={isPickerOpen}
@@ -1014,6 +1054,7 @@ export default function App() {
         isPkceAuthorizing={isPkceAuthorizing}
         credentials={credentials}
         settings={settings}
+        draggingSliderKey={draggingSliderKey}
         isTransparentDrag={isTransparentDrag}
         validationError={validationError}
         onClose={() => setIsModalOpen(false)}

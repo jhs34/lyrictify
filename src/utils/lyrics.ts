@@ -66,7 +66,7 @@ export const UI_PRESETS: UIPresetDefinition[] = [
     patch: {
       fontSize: 38,
       blurAmount: 6,
-      vertPos: 38,
+      vertPos: 50,
       lineHeight: 1.25,
       margin: 1.8,
       animSpeed: 2.0,
@@ -81,7 +81,7 @@ export const UI_PRESETS: UIPresetDefinition[] = [
     patch: {
       fontSize: 28,
       blurAmount: 10,
-      vertPos: 42,
+      vertPos: 50,
       lineHeight: 1.3,
       margin: 1.6,
       animSpeed: 2.4,
@@ -191,6 +191,23 @@ export function formatDurationMs(ms: number): string {
   const mins = Math.floor(totalSec / 60);
   const secs = totalSec % 60;
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export function formatCompactTimeMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0:00';
+  const totalSec = Math.floor(ms / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+export function formatRemainingTimeMs(currentMs: number, durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '-0:00';
+  const safeCurrent = Number.isFinite(currentMs) ? Math.max(0, currentMs) : 0;
+  const remainingSec = Math.max(0, Math.ceil((durationMs - safeCurrent) / 1000));
+  const mins = Math.floor(remainingSec / 60);
+  const secs = remainingSec % 60;
+  return `-${mins}:${String(secs).padStart(2, '0')}`;
 }
 
 export function clampSettingValue(val: number, min: number, max: number, fallback: number): number {
@@ -322,6 +339,42 @@ export function computeTrackProgressMs(
     return Math.max(0, raw);
   }
   return ((raw % PREVIEW_DURATION_MS) + PREVIEW_DURATION_MS) % PREVIEW_DURATION_MS;
+}
+
+export interface PlaybackClockSyncInput {
+  localProgressMs: number;
+  remoteProgressMs: number;
+  rttMs: number;
+  isPlaying: boolean;
+  wasPlaying: boolean;
+  trackChanged: boolean;
+  maxDriftMs?: number;
+}
+
+export function shouldResyncPlaybackClock(input: PlaybackClockSyncInput): {
+  shouldUpdate: boolean;
+  nextProgressMs: number;
+} {
+  const halfRtt = input.isPlaying ? Math.min(350, Math.max(0, input.rttMs) * 0.5) : 0;
+  const compensatedRemote = Math.max(0, Math.round(input.remoteProgressMs + halfRtt));
+  const threshold = input.maxDriftMs ?? 650;
+
+  if (input.trackChanged || input.isPlaying !== input.wasPlaying) {
+    return { shouldUpdate: true, nextProgressMs: compensatedRemote };
+  }
+
+  const drift = Math.abs(compensatedRemote - input.localProgressMs);
+  if (!input.isPlaying) {
+    return drift > 80
+      ? { shouldUpdate: true, nextProgressMs: compensatedRemote }
+      : { shouldUpdate: false, nextProgressMs: input.localProgressMs };
+  }
+
+  if (drift <= threshold) {
+    return { shouldUpdate: false, nextProgressMs: input.localProgressMs };
+  }
+
+  return { shouldUpdate: true, nextProgressMs: compensatedRemote };
 }
 
 export const INTERLUDE_MIN_GAP_MS = 10000;
@@ -959,3 +1012,41 @@ export function computeLyricVisualStyle(
   }
   return { blurPx: options.blurIntensity, opacity: 0.1, isActive: false };
 }
+
+export interface MarqueeMetrics {
+  isOverflowing: boolean;
+  slideOffsetPx: number;
+  durationSec: number;
+}
+
+export function computeMarqueeMetrics(
+  contentWidth: number,
+  containerWidth: number,
+  rightFadePx = 14
+): MarqueeMetrics {
+  if (
+    !Number.isFinite(contentWidth) ||
+    !Number.isFinite(containerWidth) ||
+    containerWidth <= 0 ||
+    contentWidth <= containerWidth + 1
+  ) {
+    return {
+      isOverflowing: false,
+      slideOffsetPx: 0,
+      durationSec: 0,
+    };
+  }
+
+  const safeRightFade = Math.max(0, Math.min(rightFadePx, containerWidth * 0.35));
+  const rawOffset = Math.ceil(contentWidth - containerWidth + safeRightFade);
+  const slideOffsetPx = Math.max(4, rawOffset);
+  // Calm ping-pong reading pace (~26px/s travel + start/end dwell phases), clamped to [6.5s, 24s]
+  const durationSec = Math.min(24, Math.max(6.5, Number((4.2 + slideOffsetPx / 24).toFixed(2))));
+
+  return {
+    isOverflowing: true,
+    slideOffsetPx,
+    durationSec,
+  };
+}
+
