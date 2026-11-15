@@ -72,10 +72,10 @@ export function Header({
     <header
       id="main-header"
       data-idle-hidden={isIdleHidden ? 'true' : 'false'}
-      className={`hud-layer-pinned z-20 w-full max-w-6xl mx-auto shrink-0 px-4 sm:px-6 lg:px-8 ${
+      className={`header-shell hud-layer-pinned z-20 w-full max-w-6xl mx-auto shrink-0 px-4 sm:px-6 lg:px-8 ${
         showInlineHeaderPlayer
           ? 'header-inline-player'
-          : 'flex items-center justify-between h-14'
+          : 'header-default-bar flex items-center justify-between'
       }`}
     >
       {/* Zone 1: Track Identity (with sliding MarqueeText + horizontal edge fade when long) */}
@@ -95,12 +95,12 @@ export function Header({
                 alt={`${track.title} 앨범 아트`}
                 referrerPolicy="no-referrer"
                 onError={() => setImgFailed(true)}
-                className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg object-cover flex-none border border-[var(--border-hairline)]"
+                className="header-album-thumb w-10 h-10 sm:w-11 sm:h-11 rounded-lg object-cover flex-none border border-[var(--border-hairline)]"
               />
             ) : (
               <div
                 aria-hidden="true"
-                className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center flex-none"
+                className="header-album-thumb w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center flex-none"
               >
                 <Disc3 size={18} strokeWidth={1.5} className="text-[var(--text-muted)]" />
               </div>

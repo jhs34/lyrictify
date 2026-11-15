@@ -959,7 +959,7 @@ export default function App() {
 
   return (
     <div
-      className={`relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] ${
+      className={`app-viewport-root relative isolate flex flex-col w-full overflow-clip bg-[var(--bg-page)] ${
         isIdleHidden ? 'cursor-none' : ''
       }`}
     >
