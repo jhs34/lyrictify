@@ -1,4 +1,4 @@
-import { SpotifyCredentials, UISettings, NumericSettingKey } from '../types/lyrics';
+import { BooleanSettingKey, NumericSettingKey, SpotifyCredentials, UISettings } from '../types/lyrics';
 import { DEFAULT_UI_SETTINGS, SETTING_CONSTRAINTS, clampSettingValue } from './lyrics';
 
 export function safeGetItem(key: string): string | null {
@@ -70,6 +70,7 @@ export function loadStoredUISettings(): UISettings {
     ...numericEntries,
     keepAwake: safeGetItem('sp_keep_awake') === 'true',
     hideControls: safeGetItem('sp_hide_controls') === 'true',
+    ambientLight: safeGetItem('sp_ambient_light') === 'true',
   };
 }
 
@@ -77,17 +78,23 @@ export function saveNumericSetting(key: NumericSettingKey, value: number): void 
   safeSetItem(STORAGE_KEY_MAP[key], String(value));
 }
 
-export function saveBooleanSetting(key: 'keepAwake' | 'hideControls', value: boolean): void {
-  const storageKey = key === 'keepAwake' ? 'sp_keep_awake' : 'sp_hide_controls';
-  safeSetItem(storageKey, String(value));
+const BOOLEAN_STORAGE_KEY_MAP: Record<BooleanSettingKey, string> = {
+  keepAwake: 'sp_keep_awake',
+  hideControls: 'sp_hide_controls',
+  ambientLight: 'sp_ambient_light',
+};
+
+export function saveBooleanSetting(key: BooleanSettingKey, value: boolean): void {
+  safeSetItem(BOOLEAN_STORAGE_KEY_MAP[key], String(value));
 }
 
 export function saveAllUISettings(settings: UISettings): void {
   (Object.keys(STORAGE_KEY_MAP) as NumericSettingKey[]).forEach((key) => {
     saveNumericSetting(key, settings[key]);
   });
-  saveBooleanSetting('keepAwake', settings.keepAwake);
-  saveBooleanSetting('hideControls', settings.hideControls);
+  (Object.keys(BOOLEAN_STORAGE_KEY_MAP) as BooleanSettingKey[]).forEach((key) => {
+    saveBooleanSetting(key, settings[key]);
+  });
 }
 
 export function applySettingsToDocumentCss(settings: UISettings): void {

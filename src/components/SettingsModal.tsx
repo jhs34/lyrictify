@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  BooleanSettingKey,
   NumericSettingKey,
   PresetId,
   SettingsTab,
@@ -18,6 +19,7 @@ import {
   ViewerStatus,
 } from '../types/lyrics';
 import {
+  DEFAULT_UI_SETTINGS,
   SETTING_CONSTRAINTS,
   UI_PRESETS,
   clampSettingValue,
@@ -41,7 +43,8 @@ interface SettingsModalProps {
   onApplyPreset: (presetId: PresetId) => void;
   onStepSyncOffset: (deltaMs: number) => void;
   onUpdateNumericSetting: (key: NumericSettingKey, value: number) => void;
-  onUpdateBooleanSetting: (key: 'keepAwake' | 'hideControls', value: boolean) => void;
+  onUpdateBooleanSetting: (key: BooleanSettingKey, value: boolean) => void;
+  onResetSingleSetting: (key: keyof UISettings) => void;
   onResetDefaults: () => void;
   onSliderDragStart: (key: NumericSettingKey) => void;
   onSliderDragEnd: () => void;
@@ -59,6 +62,12 @@ const ADVANCED_SLIDERS: NumericSettingKey[] = [
   'uiScale',
   'plainSpeed',
   'syncOffset',
+];
+
+const BOOLEAN_SWITCHES: Array<{ key: BooleanSettingKey; label: string }> = [
+  { key: 'ambientLight', label: '앰비언트 라이트' },
+  { key: 'keepAwake', label: '화면 꺼짐 방지' },
+  { key: 'hideControls', label: '재생 컨트롤러 숨기기' },
 ];
 
 const SYNC_STEPS: Array<{ label: string; deltaMs: number | 'reset' }> = [
@@ -141,11 +150,20 @@ interface SliderRowProps {
   settingKey: NumericSettingKey;
   value: number;
   onUpdate: (key: NumericSettingKey, value: number) => void;
+  onResetSingle: (key: keyof UISettings) => void;
   onDragStart: (key: NumericSettingKey) => void;
 }
 
-function SliderSettingRow({ settingKey, value, onUpdate, onDragStart }: SliderRowProps) {
+function SliderSettingRow({
+  settingKey,
+  value,
+  onUpdate,
+  onResetSingle,
+  onDragStart,
+}: SliderRowProps) {
   const constraint = SETTING_CONSTRAINTS[settingKey];
+  const defaultVal = DEFAULT_UI_SETTINGS[settingKey];
+  const isModified = value !== defaultVal;
   const sliderId = `slider-${settingKey}`;
   const numId = `num-${settingKey}`;
   const isSyncOffset = settingKey === 'syncOffset';
@@ -154,9 +172,21 @@ function SliderSettingRow({ settingKey, value, onUpdate, onDragStart }: SliderRo
     <div className="flex items-center gap-3 h-9">
       <label
         htmlFor={sliderId}
-        className="w-28 sm:w-32 text-sm text-[var(--text-secondary)] shrink-0 hide-on-drag flex items-baseline justify-between pr-1"
+        onDoubleClick={() => onResetSingle(settingKey)}
+        title={`더블클릭하여 기본값(${defaultVal}${constraint.unit ?? ''})으로 복원`}
+        className={`w-28 sm:w-32 text-sm shrink-0 hide-on-drag flex items-baseline justify-between pr-1 select-none cursor-pointer transition-colors duration-150 ${
+          isModified ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+        }`}
       >
-        <span>{constraint.label}</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span>{constraint.label}</span>
+          {isModified && (
+            <span
+              aria-hidden="true"
+              className="w-1 h-1 rounded-[1px] bg-[var(--accent)] shrink-0"
+            />
+          )}
+        </span>
         {constraint.unit && (
           <span className="font-mono-tech text-[11px] text-[var(--text-muted)]">
             {constraint.unit}
@@ -206,6 +236,57 @@ function SliderSettingRow({ settingKey, value, onUpdate, onDragStart }: SliderRo
   );
 }
 
+interface BooleanRowProps {
+  settingKey: BooleanSettingKey;
+  label: string;
+  checked: boolean;
+  onToggle: (key: BooleanSettingKey, next: boolean) => void;
+  onResetSingle: (key: keyof UISettings) => void;
+}
+
+function BooleanSettingRow({
+  settingKey,
+  label,
+  checked,
+  onToggle,
+  onResetSingle,
+}: BooleanRowProps) {
+  const defaultVal = DEFAULT_UI_SETTINGS[settingKey];
+  const isModified = checked !== defaultVal;
+  const labelId = `label-${settingKey}`;
+  const inputId = `input-${settingKey}`;
+
+  return (
+    <div className="flex items-center justify-between h-9">
+      <span
+        id={labelId}
+        onDoubleClick={() => onResetSingle(settingKey)}
+        title={`더블클릭하여 기본값(${defaultVal ? '켜짐' : '꺼짐'})으로 복원`}
+        className={`text-sm select-none cursor-pointer inline-flex items-center gap-1.5 transition-colors duration-150 ${
+          isModified ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+        }`}
+      >
+        <span>{label}</span>
+        {isModified && (
+          <span aria-hidden="true" className="w-1 h-1 rounded-[1px] bg-[var(--accent)] shrink-0" />
+        )}
+      </span>
+
+      <label className="relative inline-flex items-center cursor-pointer">
+        <input
+          id={inputId}
+          type="checkbox"
+          aria-labelledby={labelId}
+          checked={checked}
+          onChange={(e) => onToggle(settingKey, e.target.checked)}
+          className="sr-only peer"
+        />
+        <div className="w-10 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-5" />
+      </label>
+    </div>
+  );
+}
+
 export function SettingsModal({
   isOpen,
   initialTab,
@@ -223,6 +304,7 @@ export function SettingsModal({
   onStepSyncOffset,
   onUpdateNumericSetting,
   onUpdateBooleanSetting,
+  onResetSingleSetting,
   onResetDefaults,
   onSliderDragStart,
   onSliderDragEnd,
@@ -298,6 +380,7 @@ export function SettingsModal({
   );
 
   const activePreset = detectActivePreset(settings);
+  const isSyncModified = settings.syncOffset !== DEFAULT_UI_SETTINGS.syncOffset;
 
   const handleSmartPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const raw = e.clipboardData.getData('text');
@@ -425,7 +508,7 @@ export function SettingsModal({
           </button>
         </div>
 
-        {/* TAB 1: 화면 · 싱크 (Everyday Zero-Scroll View) */}
+        {/* TAB 1: 화면 · 싱크 */}
         {activeTab === 'display' ? (
           <div
             id="panel-display"
@@ -433,14 +516,16 @@ export function SettingsModal({
             aria-labelledby="tab-display"
             className="flex flex-col flex-1 min-h-0"
           >
-            <div className="px-5 py-5 space-y-5 flex-1 overflow-y-auto">
+            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto">
               {/* 1. One-Tap View Presets */}
               <section className="space-y-2 hide-on-drag" aria-label="빠른 화면 프리셋">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-[var(--text-secondary)]">
                     빠른 프리셋
                   </span>
-                  <span className="text-[11px] text-[var(--text-muted)]">변경 즉시 자동 저장</span>
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    항목 이름 더블클릭 시 개별 초기화
+                  </span>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {UI_PRESETS.map((preset) => {
@@ -470,8 +555,20 @@ export function SettingsModal({
               {/* 2. Effortless Sync Stepper */}
               <section className="space-y-2 hide-on-drag" aria-label="가사 싱크 빠른 조절">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[var(--text-secondary)]">
-                    가사 싱크
+                  <span
+                    onDoubleClick={() => onResetSingleSetting('syncOffset')}
+                    title="더블클릭하여 기본값(0ms)으로 복원"
+                    className={`text-xs font-medium select-none cursor-pointer inline-flex items-center gap-1.5 transition-colors duration-150 ${
+                      isSyncModified ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+                    }`}
+                  >
+                    <span>가사 싱크</span>
+                    {isSyncModified && (
+                      <span
+                        aria-hidden="true"
+                        className="w-1 h-1 rounded-[1px] bg-[var(--accent)] shrink-0"
+                      />
+                    )}
                   </span>
                   <span className="text-xs text-[var(--accent)] flex items-center gap-1.5">
                     <span className="font-mono-tech">
@@ -500,7 +597,7 @@ export function SettingsModal({
                         disabled={isZeroDisabled}
                         onClick={() => {
                           if (item.deltaMs === 'reset') {
-                            onUpdateNumericSetting('syncOffset', 0);
+                            onResetSingleSetting('syncOffset');
                           } else {
                             onStepSyncOffset(item.deltaMs);
                           }
@@ -523,7 +620,7 @@ export function SettingsModal({
 
               {/* 3. Core Live-Preview Sliders */}
               <section
-                className={`pt-4 border-t space-y-2 transition-colors duration-200 ${
+                className={`pt-3.5 border-t space-y-1.5 transition-colors duration-200 ${
                   isTransparentDrag ? 'border-transparent' : 'border-[var(--border-hairline)]'
                 }`}
                 aria-label="글자 및 블러 설정"
@@ -534,53 +631,27 @@ export function SettingsModal({
                     settingKey={key}
                     value={settings[key]}
                     onUpdate={onUpdateNumericSetting}
+                    onResetSingle={onResetSingleSetting}
                     onDragStart={onSliderDragStart}
                   />
                 ))}
               </section>
 
-              {/* 4. Core Switches */}
+              {/* 4. Core Switches (Ambient Light, Keep Awake, Hide Controls) */}
               <section
-                className="pt-3 border-t border-[var(--border-hairline)] space-y-1 hide-on-drag"
-                aria-label="화면 유지 및 컨트롤러 표시"
+                className="pt-3 border-t border-[var(--border-hairline)] space-y-0.5 hide-on-drag"
+                aria-label="배경 조명 및 화면 표시"
               >
-                <div className="flex items-center justify-between h-9">
-                  <label
-                    htmlFor="input-keep-awake"
-                    className="text-sm text-[var(--text-secondary)] cursor-pointer"
-                  >
-                    화면 꺼짐 방지
-                  </label>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      id="input-keep-awake"
-                      type="checkbox"
-                      checked={settings.keepAwake}
-                      onChange={(e) => onUpdateBooleanSetting('keepAwake', e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-10 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-5" />
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between h-9">
-                  <label
-                    htmlFor="input-hide-controls"
-                    className="text-sm text-[var(--text-secondary)] cursor-pointer"
-                  >
-                    재생 컨트롤러 숨기기
-                  </label>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      id="input-hide-controls"
-                      type="checkbox"
-                      checked={settings.hideControls}
-                      onChange={(e) => onUpdateBooleanSetting('hideControls', e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-10 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-5" />
-                  </label>
-                </div>
+                {BOOLEAN_SWITCHES.map((item) => (
+                  <BooleanSettingRow
+                    key={item.key}
+                    settingKey={item.key}
+                    label={item.label}
+                    checked={settings[item.key]}
+                    onToggle={onUpdateBooleanSetting}
+                    onResetSingle={onResetSingleSetting}
+                  />
+                ))}
               </section>
 
               {/* 5. Collapsible Advanced Motion & Spacing */}
@@ -611,6 +682,7 @@ export function SettingsModal({
                         settingKey={key}
                         value={settings[key]}
                         onUpdate={onUpdateNumericSetting}
+                        onResetSingle={onResetSingleSetting}
                         onDragStart={onSliderDragStart}
                       />
                     ))}
@@ -619,7 +691,7 @@ export function SettingsModal({
               </section>
             </div>
 
-            {/* Pinned Display Footer: Reset (Secondary) + Done (Primary — never triggers Spotify auth error!) */}
+            {/* Pinned Display Footer */}
             <div
               className={`px-5 py-3.5 border-t shrink-0 flex items-center justify-between gap-2 hide-on-drag transition-colors duration-200 ${
                 isTransparentDrag
@@ -655,7 +727,6 @@ export function SettingsModal({
             className="flex flex-col flex-1 min-h-0"
           >
             <div className="px-5 py-5 space-y-4 flex-1 overflow-y-auto">
-              {/* Connection Status & Guide Bar */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
                   <span aria-hidden="true" className={`w-2 h-2 rounded-[2px] ${statusDotClass}`} />
@@ -726,7 +797,6 @@ export function SettingsModal({
                 </div>
               )}
 
-              {/* Credentials Group */}
               <div className="space-y-3">
                 <div>
                   <label
@@ -843,7 +913,6 @@ export function SettingsModal({
               </div>
             </div>
 
-            {/* Pinned Spotify Footer: UI 미리보기 (Secondary) + 저장 및 연결 (Primary) */}
             <div className="px-5 py-3.5 border-t border-[var(--border-hairline)] bg-[var(--bg-deepest)]/50 shrink-0 flex items-center justify-between gap-2">
               <button
                 type="button"

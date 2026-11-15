@@ -22,7 +22,16 @@ export const DEFAULT_UI_SETTINGS: UISettings = {
   uiScale: 1.0,
   keepAwake: false,
   hideControls: false,
+  ambientLight: false,
 };
+
+export interface RGBColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export const DEFAULT_AMBIENT_RGB: RGBColor = { r: 229, g: 169, b: 60 };
 
 export interface UIPresetDefinition {
   id: PresetId;
@@ -128,6 +137,98 @@ export function clampSettingValue(val: number, min: number, max: number, fallbac
   if (!Number.isFinite(val)) return fallback;
   const clamped = Math.max(min, Math.min(max, val));
   return Math.round(clamped * 1000) / 1000;
+}
+
+export function resetSingleSetting<K extends keyof UISettings>(
+  settings: UISettings,
+  key: K
+): UISettings {
+  return {
+    ...settings,
+    [key]: DEFAULT_UI_SETTINGS[key],
+  };
+}
+
+export function extractDominantColorFromPixels(data: ArrayLike<number>): RGBColor {
+  if (!data || data.length < 4) {
+    return { ...DEFAULT_AMBIENT_RGB };
+  }
+
+  let weightedR = 0;
+  let weightedG = 0;
+  let weightedB = 0;
+  let totalWeight = 0;
+
+  let fallbackR = 0;
+  let fallbackG = 0;
+  let fallbackB = 0;
+  let opaqueCount = 0;
+
+  for (let i = 0; i <= data.length - 4; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
+
+    if (a < 128) continue;
+
+    fallbackR += r;
+    fallbackG += g;
+    fallbackB += b;
+    opaqueCount++;
+
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+
+    // Skip near-black letterbox/shadows and near-white highlights when finding chroma
+    if (maxC < 28 || minC > 235) continue;
+
+    const delta = maxC - minC;
+    const saturation = maxC === 0 ? 0 : delta / maxC;
+    const weight = 0.35 + saturation * saturation * 3.2;
+
+    weightedR += r * weight;
+    weightedG += g * weight;
+    weightedB += b * weight;
+    totalWeight += weight;
+  }
+
+  if (opaqueCount === 0) {
+    return { ...DEFAULT_AMBIENT_RGB };
+  }
+
+  let r = totalWeight > 0 ? weightedR / totalWeight : fallbackR / opaqueCount;
+  let g = totalWeight > 0 ? weightedG / totalWeight : fallbackG / opaqueCount;
+  let b = totalWeight > 0 ? weightedB / totalWeight : fallbackB / opaqueCount;
+
+  // Normalize peak brightness into a balanced ambient glow range (145..220)
+  const peak = Math.max(r, g, b, 1);
+  if (peak < 145) {
+    const boost = 145 / peak;
+    r *= boost;
+    g *= boost;
+    b *= boost;
+  } else if (peak > 220) {
+    const scale = 220 / peak;
+    r *= scale;
+    g *= scale;
+    b *= scale;
+  }
+
+  return {
+    r: Math.round(Math.min(255, Math.max(0, r))),
+    g: Math.round(Math.min(255, Math.max(0, g))),
+    b: Math.round(Math.min(255, Math.max(0, b))),
+  };
+}
+
+export function deriveSecondaryAmbientColor(primary: RGBColor): RGBColor {
+  // Subtle warm-cool harmonic shift for dual-lobe breathing depth
+  return {
+    r: Math.round(primary.r * 0.72 + primary.b * 0.28),
+    g: Math.round(primary.g * 0.78 + primary.r * 0.22),
+    b: Math.round(primary.b * 0.75 + primary.g * 0.25),
+  };
 }
 
 export function stepSyncOffset(currentOffset: number, deltaMs: number): number {

@@ -22,13 +22,16 @@
   /* Single Easing Curve */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* Dynamic Lyric & Controller Tokens */
+  /* Dynamic Lyric, Controller & Ambient Light Tokens */
   --lyric-base-size: 24px;
   --lyric-line-height: 1.2;
   --lyric-margin-bottom: 1.5rem;
   --lyric-anim-duration: 2s;
   --lyric-tracking: 0em;
   --ui-scale: 1;
+  --album-art-image: none;
+  --ambient-rgb: 229, 169, 60;
+  --ambient-secondary-rgb: 182, 132, 62;
 }
 
 html,
@@ -197,11 +200,78 @@ input[type="number"].no-spinner {
   transform: translateX(-50%) translateY(8px) scale(calc(var(--ui-scale, 1) * 0.98));
 }
 
+.album-art-backdrop {
+  background-image: var(--album-art-image);
+}
+
+.ambient-light-stage {
+  transition: opacity 700ms var(--ease-out);
+}
+
+.ambient-lobe-primary {
+  background: radial-gradient(
+    circle at 32% 38%,
+    rgba(var(--ambient-rgb), 0.46) 0%,
+    rgba(var(--ambient-rgb), 0.18) 42%,
+    rgba(var(--ambient-rgb), 0) 72%
+  );
+  animation: ambient-pulse-primary 6.8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.ambient-lobe-secondary {
+  background: radial-gradient(
+    circle at 72% 64%,
+    rgba(var(--ambient-secondary-rgb), 0.38) 0%,
+    rgba(var(--ambient-secondary-rgb), 0.14) 45%,
+    rgba(var(--ambient-secondary-rgb), 0) 74%
+  );
+  animation: ambient-pulse-secondary 9.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.ambient-light-stage.ambient-paused .ambient-lobe-primary,
+.ambient-light-stage.ambient-paused .ambient-lobe-secondary {
+  animation-duration: 14s;
+}
+
+@keyframes ambient-pulse-primary {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate3d(-2%, -2%, 0) scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(3%, 2%, 0) scale(1.12);
+  }
+}
+
+@keyframes ambient-pulse-secondary {
+  0%,
+  100% {
+    opacity: 0.92;
+    transform: translate3d(2%, 3%, 0) scale(1.08);
+  }
+  50% {
+    opacity: 0.48;
+    transform: translate3d(-3%, -2%, 0) scale(0.94);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lyric-line-wrapper,
   .lyric-line,
   .surface-floating,
-  .surface-modal {
+  .surface-modal,
+  .ambient-light-stage {
     transition-duration: 120ms;
   }
+
+  .ambient-lobe-primary,
+  .ambient-lobe-secondary {
+    animation: none;
+    opacity: 0.72;
+  }
 }
+

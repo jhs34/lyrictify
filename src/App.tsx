@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { LyricsViewport } from './components/LyricsViewport';
 import { MediaControls } from './components/MediaControls';
 import { SettingsModal } from './components/SettingsModal';
+import { useDominantAlbumColor } from './hooks/useDominantAlbumColor';
 import { useWakeLock } from './hooks/useWakeLock';
 import { searchLyricsOnLrcLib } from './services/lrclib';
 import {
@@ -16,6 +17,7 @@ import {
   sendSpotifySeek,
 } from './services/spotify';
 import {
+  BooleanSettingKey,
   LyricLine,
   NumericSettingKey,
   PresetId,
@@ -33,6 +35,7 @@ import {
   computeTrackProgressMs,
   parseLRC,
   parsePlainLyrics,
+  resetSingleSetting,
   stepSyncOffset,
 } from './utils/lyrics';
 import {
@@ -96,11 +99,19 @@ export default function App() {
   const syncFeedbackTimerRef = useRef<number | null>(null);
 
   useWakeLock(settings.keepAwake);
+  useDominantAlbumColor(track?.albumArtUrl ?? null);
 
   // Sync CSS variables synchronously before layout measurements in child effects
   useLayoutEffect(() => {
     applySettingsToDocumentCss(settings);
   }, [settings]);
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(
+      '--album-art-image',
+      track?.albumArtUrl ? `url("${track.albumArtUrl}")` : 'none'
+    );
+  }, [track?.albumArtUrl]);
 
   const showTemporarySyncFeedback = useCallback((offsetMs: number) => {
     if (syncFeedbackTimerRef.current !== null) {
@@ -495,10 +506,22 @@ export default function App() {
     });
   }, []);
 
-  const handleUpdateBooleanSetting = (key: 'keepAwake' | 'hideControls', value: boolean) => {
+  const handleUpdateBooleanSetting = (key: BooleanSettingKey, value: boolean) => {
     saveBooleanSetting(key, value);
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
+
+  const handleResetSingleSetting = useCallback((key: keyof UISettings) => {
+    setSettings((prev) => {
+      const next = resetSingleSetting(prev, key);
+      if (key === 'keepAwake' || key === 'hideControls' || key === 'ambientLight') {
+        saveBooleanSetting(key, next[key]);
+      } else {
+        saveNumericSetting(key, next[key]);
+      }
+      return next;
+    });
+  }, []);
 
   const handleResetDefaults = () => {
     saveAllUISettings(DEFAULT_UI_SETTINGS);
@@ -603,16 +626,27 @@ export default function App() {
 
   return (
     <div className="relative isolate flex flex-col h-screen w-screen overflow-clip bg-[var(--bg-page)] pb-20">
-      {/* Ambient Album Art Blurred Backdrop */}
+      {/* Album Art Static Blurred Base */}
       <div
         aria-hidden="true"
-        style={{
-          backgroundImage: track?.albumArtUrl ? `url('${track.albumArtUrl}')` : 'none',
-        }}
-        className={`pointer-events-none absolute -inset-[12%] bg-cover bg-center blur-[64px] brightness-[0.68] saturate-[1.65] z-0 transition-opacity duration-700 ${
+        className={`album-art-backdrop pointer-events-none absolute -inset-[12%] bg-cover bg-center blur-[64px] brightness-[0.62] saturate-[1.55] z-0 transition-opacity duration-700 ${
           track?.albumArtUrl ? 'opacity-100' : 'opacity-0'
         }`}
       />
+
+      {/* Dominant-Color Pulsing Ambient Light Stage */}
+      <div
+        aria-hidden="true"
+        data-testid="ambient-light-stage"
+        data-active={settings.ambientLight ? 'true' : 'false'}
+        className={`ambient-light-stage pointer-events-none absolute -inset-[16%] blur-[48px] z-0 ${
+          settings.ambientLight ? 'opacity-100' : 'opacity-0'
+        } ${isPlaying ? '' : 'ambient-paused'}`}
+      >
+        <div className="ambient-lobe-primary absolute inset-0" />
+        <div className="ambient-lobe-secondary absolute inset-0" />
+      </div>
+
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f10]/35 via-[#0f0f10]/15 to-[#0f0f10]/65 z-0"
@@ -669,6 +703,7 @@ export default function App() {
         onStepSyncOffset={handleStepSyncOffset}
         onUpdateNumericSetting={handleUpdateNumericSetting}
         onUpdateBooleanSetting={handleUpdateBooleanSetting}
+        onResetSingleSetting={handleResetSingleSetting}
         onResetDefaults={handleResetDefaults}
         onSliderDragStart={handleSliderDragStart}
         onSliderDragEnd={handleSliderDragEnd}

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_AMBIENT_RGB,
   DEFAULT_UI_SETTINGS,
   PREVIEW_LRC,
   UI_PRESETS,
@@ -9,13 +10,16 @@ import {
   cleanTitle,
   computeLyricVisualStyle,
   computeTrackProgressMs,
+  deriveSecondaryAmbientColor,
   detectActivePreset,
   encodeBasicAuth,
+  extractDominantColorFromPixels,
   findActiveLyricIndex,
   formatSyncOffsetLabel,
   parseLRC,
   parsePastedCredentials,
   parsePlainLyrics,
+  resetSingleSetting,
   selectBestLyricsFromCandidates,
   stepSyncOffset,
 } from './lyrics';
@@ -185,3 +189,46 @@ test('parsePastedCredentials extracts credentials from JSON, .env key=value, and
 
   assert.equal(parsePastedCredentials('single_token_string_only'), null);
 });
+
+test('resetSingleSetting restores only the targeted setting key to its default value', () => {
+  const modified = {
+    ...DEFAULT_UI_SETTINGS,
+    fontSize: 44,
+    blurAmount: 14,
+    ambientLight: true,
+    syncOffset: -300,
+  };
+
+  const afterFontReset = resetSingleSetting(modified, 'fontSize');
+  assert.equal(afterFontReset.fontSize, DEFAULT_UI_SETTINGS.fontSize);
+  assert.equal(afterFontReset.blurAmount, 14);
+  assert.equal(afterFontReset.ambientLight, true);
+  assert.equal(afterFontReset.syncOffset, -300);
+
+  const afterAmbientReset = resetSingleSetting(afterFontReset, 'ambientLight');
+  assert.equal(afterAmbientReset.ambientLight, false);
+  assert.equal(afterAmbientReset.blurAmount, 14);
+});
+
+test('extractDominantColorFromPixels weights saturated album hues over black borders and handles empty data', () => {
+  assert.deepEqual(extractDominantColorFromPixels([]), DEFAULT_AMBIENT_RGB);
+
+  // 3 black border pixels + 2 saturated cobalt-blue pixels
+  const pixels = [
+    10, 10, 12, 255,
+    8, 8, 8, 255,
+    12, 12, 14, 255,
+    30, 110, 210, 255,
+    36, 118, 216, 255,
+  ];
+  const dominant = extractDominantColorFromPixels(pixels);
+  assert.equal(dominant.b > dominant.g, true);
+  assert.equal(dominant.g > dominant.r, true);
+  assert.equal(dominant.b >= 145 && dominant.b <= 220, true);
+
+  const secondary = deriveSecondaryAmbientColor(dominant);
+  assert.equal(secondary.r >= 0 && secondary.r <= 255, true);
+  assert.equal(secondary.g >= 0 && secondary.g <= 255, true);
+  assert.equal(secondary.b >= 0 && secondary.b <= 255, true);
+});
+

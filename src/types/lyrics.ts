@@ -22,9 +22,12 @@ export interface UISettings {
   uiScale: number;
   keepAwake: boolean;
   hideControls: boolean;
+  ambientLight: boolean;
 }
 
-export type NumericSettingKey = Exclude<keyof UISettings, 'keepAwake' | 'hideControls'>;
+export type BooleanSettingKey = 'keepAwake' | 'hideControls' | 'ambientLight';
+
+export type NumericSettingKey = Exclude<keyof UISettings, BooleanSettingKey>;
 
 export interface TrackMetadata {
   id: string;
