@@ -472,7 +472,7 @@ export function SettingsModal({
           onClose();
         }
       }}
-      className={`fixed inset-0 z-50 flex justify-center items-center p-4 transition-colors duration-200 ${
+      className={`fixed inset-0 z-50 isolate flex justify-center items-center p-4 transition-colors duration-200 ${
         isTransparentDrag ? 'bg-transparent' : 'bg-black/65'
       }`}
     >
@@ -480,7 +480,7 @@ export function SettingsModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
-        className={`surface-modal w-full max-w-[476px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
+        className={`surface-modal relative w-full max-w-[476px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
           isTransparentDrag ? 'transparent-mode' : ''
         }`}
       >
@@ -551,7 +551,7 @@ export function SettingsModal({
             aria-labelledby="tab-display"
             className="flex flex-col flex-1 min-h-0"
           >
-            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto">
+            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto modal-scroll-body">
               {/* 1. One-Tap View Presets */}
               <section className="space-y-2 hide-on-drag" aria-label="빠른 화면 프리셋">
                 <div className="flex items-center justify-between gap-2">
@@ -756,7 +756,7 @@ export function SettingsModal({
             onSubmit={handleManualSpotifySubmit}
             className="flex flex-col flex-1 min-h-0"
           >
-            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto">
+            <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto modal-scroll-body">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
                   <span aria-hidden="true" className={`w-2 h-2 rounded-[2px] ${statusDotClass}`} />

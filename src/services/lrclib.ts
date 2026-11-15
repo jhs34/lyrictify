@@ -1,5 +1,6 @@
 import { LrcLibCandidate, LrcLibSongItem, LyricsFetchResult } from '../types/lyrics';
 import {
+  LyricMatchContext,
   buildSearchQueries,
   normalizeLrcLibCandidates,
   selectBestLyricsFromCandidates,
@@ -20,12 +21,13 @@ async function fetchRawLrcLibItems(queryStr: string, signal?: AbortSignal): Prom
 
 export async function fetchLrcLibCandidates(
   queryStr: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  matchContext?: LyricMatchContext
 ): Promise<LrcLibCandidate[]> {
   const trimmed = queryStr.trim();
   if (!trimmed) return [];
   const raw = await fetchRawLrcLibItems(trimmed, signal);
-  return normalizeLrcLibCandidates(raw);
+  return normalizeLrcLibCandidates(raw, matchContext);
 }
 
 export async function searchLyricsOnLrcLib(
@@ -34,37 +36,40 @@ export async function searchLyricsOnLrcLib(
   durationMs: number,
   signal?: AbortSignal
 ): Promise<LyricsFetchResult | null> {
-  const { firstArtist, queries } = buildSearchQueries(title, artist);
-  const durationSec = durationMs ? Math.round(durationMs / 1000) : 0;
+  const { queries } = buildSearchQueries(title, artist);
+  const durationSec = durationMs > 0 ? durationMs / 1000 : 0;
+  const matchContext: LyricMatchContext = {
+    targetTitle: title,
+    targetArtist: artist,
+    targetDurationSec: durationSec,
+  };
 
-  let collectedCandidates: LrcLibCandidate[] = [];
+  let fallbackPlainResult: LyricsFetchResult | null = null;
 
   for (const query of queries) {
     if (signal?.aborted) return null;
     const rawItems = await fetchRawLrcLibItems(query, signal);
     if (rawItems.length === 0) continue;
 
-    const normalized = normalizeLrcLibCandidates(rawItems);
-    if (collectedCandidates.length === 0 && normalized.length > 0) {
-      collectedCandidates = normalized;
-    }
-
-    const best = selectBestLyricsFromCandidates(rawItems, query, firstArtist, durationSec);
+    const normalized = normalizeLrcLibCandidates(rawItems, matchContext);
+    const best = selectBestLyricsFromCandidates(rawItems, query, artist, durationSec, title);
     if (best) {
-      return {
+      const result: LyricsFetchResult = {
         type: best.type,
         text: best.text,
         sourceLabel: best.type === 'plain' ? 'LRCLIB (일반 가사)' : 'LRCLIB',
         selectedId: best.selectedId,
         candidates: normalized,
       };
+      // Return synced match immediately; hold plain match briefly in case a cleaned query finds synced lyrics
+      if (best.type === 'synced') {
+        return result;
+      }
+      if (!fallbackPlainResult) {
+        fallbackPlainResult = result;
+      }
     }
   }
 
-  if (collectedCandidates.length > 0) {
-    // Even if strict artist/duration filter didn't auto-pick, return null or allow manual pick via fetchLrcLibCandidates
-    return null;
-  }
-
-  return null;
+  return fallbackPlainResult;
 }

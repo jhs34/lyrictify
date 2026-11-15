@@ -114,6 +114,7 @@ export default function App() {
   const currentSongIdRef = useRef<string>('');
   const isPreviewRef = useRef<boolean>(false);
   const lyricsAbortRef = useRef<AbortController | null>(null);
+  const dragHoldTimerRef = useRef<number | null>(null);
   const dragReleaseTimerRef = useRef<number | null>(null);
   const syncFeedbackTimerRef = useRef<number | null>(null);
   const popupWatchTimerRef = useRef<number | null>(null);
@@ -130,10 +131,11 @@ export default function App() {
   }, [settings]);
 
   useLayoutEffect(() => {
-    document.documentElement.style.setProperty(
-      '--album-art-image',
-      track?.albumArtUrl ? `url("${track.albumArtUrl}")` : 'none'
-    );
+    const nextBg = track?.albumArtUrl ? `url("${track.albumArtUrl}")` : 'none';
+    const rootStyle = document.documentElement.style;
+    if (rootStyle.getPropertyValue('--album-art-image') !== nextBg) {
+      rootStyle.setProperty('--album-art-image', nextBg);
+    }
   }, [track?.albumArtUrl]);
 
   const showTemporarySyncFeedback = useCallback((offsetMs: number) => {
@@ -799,19 +801,32 @@ export default function App() {
   const handleSliderDragStart = (key: NumericSettingKey) => {
     if (dragReleaseTimerRef.current !== null) {
       window.clearTimeout(dragReleaseTimerRef.current);
+      dragReleaseTimerRef.current = null;
     }
-    setDraggingSliderKey(key);
-    setIsTransparentDrag(true);
+    if (dragHoldTimerRef.current !== null) {
+      window.clearTimeout(dragHoldTimerRef.current);
+    }
+    // Delay transparent modal preview slightly so quick clicks/nudges on sliders never blink the modal
+    dragHoldTimerRef.current = window.setTimeout(() => {
+      dragHoldTimerRef.current = null;
+      setDraggingSliderKey(key);
+      setIsTransparentDrag(true);
+    }, 140);
   };
 
   const handleSliderDragEnd = useCallback(() => {
+    if (dragHoldTimerRef.current !== null) {
+      window.clearTimeout(dragHoldTimerRef.current);
+      dragHoldTimerRef.current = null;
+    }
     if (dragReleaseTimerRef.current !== null) {
       window.clearTimeout(dragReleaseTimerRef.current);
     }
     dragReleaseTimerRef.current = window.setTimeout(() => {
+      dragReleaseTimerRef.current = null;
       setIsTransparentDrag(false);
       setDraggingSliderKey(null);
-    }, 150);
+    }, 120);
   }, []);
 
   // Convenient keyboard shortcuts when modals are closed: Space (Play/Pause), [ / ] / \ (Sync), F (Fullscreen)
@@ -905,36 +920,35 @@ export default function App() {
         isIdleHidden ? 'cursor-none' : ''
       }`}
     >
-      {/* Album Art Static Blurred Base (dims down when Ambient Light is OFF so toggling is immediately clear) */}
+      {/* Strictly Contained Ambient & Album Backdrop Layer (isolated from modal/accordion layout repaints) */}
       <div
         aria-hidden="true"
-        className={`album-art-backdrop pointer-events-none absolute -inset-[12%] bg-cover bg-center blur-[64px] z-0 transition-[opacity,filter] duration-700 ${
-          track?.albumArtUrl ? 'opacity-100' : 'opacity-0'
-        } ${
-          settings.ambientLight
-            ? 'brightness-[0.48] saturate-[1.55]'
-            : 'brightness-[0.30] saturate-[1.10]'
-        }`}
-      />
-
-      {/* Dominant-Color Pulsing Ambient Light Stage (Screen-blended living color auras) */}
-      <div
-        aria-hidden="true"
-        data-testid="ambient-light-stage"
-        data-active={settings.ambientLight ? 'true' : 'false'}
-        className={`ambient-light-stage pointer-events-none absolute -inset-[18%] blur-[44px] z-0 ${
-          settings.ambientLight ? 'opacity-100' : 'opacity-0'
-        } ${isPlaying ? '' : 'ambient-paused'}`}
+        className="ambient-backdrop-container pointer-events-none absolute inset-0 overflow-hidden z-0"
       >
-        <div className="ambient-lobe-primary absolute inset-0" />
-        <div className="ambient-lobe-secondary absolute inset-0" />
-        <div className="ambient-lobe-bloom absolute inset-0" />
-      </div>
+        <div
+          className={`album-art-backdrop absolute -inset-[20%] scale-105 bg-cover bg-center blur-[52px] transition-[opacity,filter] duration-700 ${
+            track?.albumArtUrl ? 'opacity-100' : 'opacity-0'
+          } ${
+            settings.ambientLight
+              ? 'brightness-[0.46] saturate-[1.50]'
+              : 'brightness-[0.28] saturate-[1.08]'
+          }`}
+        />
 
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#0f0f10]/30 via-transparent to-[#0f0f10]/55 z-0"
-      />
+        <div
+          data-testid="ambient-light-stage"
+          data-active={settings.ambientLight ? 'true' : 'false'}
+          className={`ambient-light-stage absolute inset-0 overflow-hidden ${
+            settings.ambientLight ? 'opacity-100' : 'opacity-0'
+          } ${isPlaying ? '' : 'ambient-paused'}`}
+        >
+          <div className="ambient-lobe-primary absolute -inset-[34%]" />
+          <div className="ambient-lobe-secondary absolute -inset-[34%]" />
+          <div className="ambient-lobe-bloom absolute -inset-[28%]" />
+        </div>
+
+        <div className="absolute inset-0 bg-gradient-to-b from-[#0f0f10]/30 via-transparent to-[#0f0f10]/55" />
+      </div>
 
       <Header
         track={track}

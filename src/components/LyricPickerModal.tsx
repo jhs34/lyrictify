@@ -93,8 +93,15 @@ export function LyricPickerModal({
 
     if (initialCandidates.length === 0 && defaultQuery) {
       const controller = new AbortController();
+      const matchContext = track
+        ? {
+            targetTitle: track.title,
+            targetArtist: track.artist,
+            targetDurationSec: track.durationMs > 0 ? track.durationMs / 1000 : 0,
+          }
+        : undefined;
       setIsSearching(true);
-      void fetchLrcLibCandidates(defaultQuery, controller.signal).then((results) => {
+      void fetchLrcLibCandidates(defaultQuery, controller.signal, matchContext).then((results) => {
         if (!controller.signal.aborted) {
           setCandidates(results);
           setHasSearchedCustom(true);
@@ -125,9 +132,17 @@ export function LyricPickerModal({
     const trimmed = query.trim();
     if (!trimmed) return;
 
+    const matchContext = track
+      ? {
+          targetTitle: track.title,
+          targetArtist: track.artist,
+          targetDurationSec: track.durationMs > 0 ? track.durationMs / 1000 : 0,
+        }
+      : undefined;
+
     setIsSearching(true);
     setHasSearchedCustom(true);
-    const results = await fetchLrcLibCandidates(trimmed);
+    const results = await fetchLrcLibCandidates(trimmed, undefined, matchContext);
     setCandidates(results);
     setIsSearching(false);
   };
@@ -139,13 +154,13 @@ export function LyricPickerModal({
           onClose();
         }
       }}
-      className="fixed inset-0 z-50 flex justify-center items-center p-4 bg-black/65 transition-colors duration-200"
+      className="fixed inset-0 z-50 isolate flex justify-center items-center p-4 bg-black/65 transition-colors duration-200"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="lyric-picker-title"
-        className="surface-modal w-full max-w-[480px] rounded-2xl max-h-[82vh] flex flex-col overflow-hidden"
+        className="surface-modal relative w-full max-w-[480px] rounded-2xl max-h-[82vh] flex flex-col overflow-hidden"
       >
         <div className="flex items-center justify-between px-5 h-14 shrink-0 border-b border-[var(--border-hairline)]">
           <h2 id="lyric-picker-title" className="text-sm font-medium text-[var(--text-primary)]">
@@ -189,7 +204,7 @@ export function LyricPickerModal({
           </button>
         </form>
 
-        <div className="p-3 space-y-1.5 flex-1 overflow-y-auto min-h-[220px]">
+        <div className="p-3 space-y-1.5 flex-1 overflow-y-auto modal-scroll-body min-h-[220px]">
           {isSearching ? (
             <div className="h-44 flex items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
               <Loader2 size={16} strokeWidth={1.5} className="animate-spin text-[var(--text-muted)]" />

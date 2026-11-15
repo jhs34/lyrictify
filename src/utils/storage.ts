@@ -28,7 +28,7 @@ export function safeRemoveItem(key: string): void {
 const STORAGE_KEY_MAP: Record<NumericSettingKey, string> = {
   syncOffset: 'sp_sync-offset',
   fontSize: 'sp_font-size',
-  vertPos: 'sp_vert-pos',
+  vertPos: 'sp_vert-pos_v2',
   blurAmount: 'sp_blur-amount',
   animSpeed: 'sp_anim-speed',
   waveDelay: 'sp_wave-delay',
@@ -165,12 +165,18 @@ export function saveAllUISettings(settings: UISettings): void {
   });
 }
 
+function setRootPropertyIfChanged(root: HTMLElement, name: string, value: string): void {
+  if (root.style.getPropertyValue(name) !== value) {
+    root.style.setProperty(name, value);
+  }
+}
+
 export function applySettingsToDocumentCss(settings: UISettings): void {
   const root = document.documentElement;
-  root.style.setProperty('--lyric-base-size', `${settings.fontSize}px`);
-  root.style.setProperty('--lyric-anim-duration', `${settings.animSpeed}s`);
-  root.style.setProperty('--lyric-line-height', `${settings.lineHeight}`);
-  root.style.setProperty('--lyric-margin-bottom', `${settings.margin}rem`);
-  root.style.setProperty('--ui-scale', `${settings.uiScale}`);
-  root.style.setProperty('--lyric-tracking', settings.fontSize >= 40 ? '-0.02em' : '0em');
+  setRootPropertyIfChanged(root, '--lyric-base-size', `${settings.fontSize}px`);
+  setRootPropertyIfChanged(root, '--lyric-anim-duration', `${settings.animSpeed}s`);
+  setRootPropertyIfChanged(root, '--lyric-line-height', `${settings.lineHeight}`);
+  setRootPropertyIfChanged(root, '--lyric-margin-bottom', `${settings.margin}rem`);
+  setRootPropertyIfChanged(root, '--ui-scale', `${settings.uiScale}`);
+  setRootPropertyIfChanged(root, '--lyric-tracking', settings.fontSize >= 40 ? '-0.02em' : '0em');
 }

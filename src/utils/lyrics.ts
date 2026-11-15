@@ -14,7 +14,7 @@ export const PREVIEW_DURATION_MS = 45000;
 export const DEFAULT_UI_SETTINGS: UISettings = {
   syncOffset: 0,
   fontSize: 24,
-  vertPos: 40,
+  vertPos: 50,
   blurAmount: 5,
   animSpeed: 2.0,
   waveDelay: 0.05,
@@ -52,7 +52,7 @@ export const UI_PRESETS: UIPresetDefinition[] = [
     patch: {
       fontSize: 24,
       blurAmount: 5,
-      vertPos: 40,
+      vertPos: 50,
       lineHeight: 1.2,
       margin: 1.5,
       animSpeed: 2.0,
@@ -126,16 +126,16 @@ export const PREVIEW_LRC = `[00:00.000] 어두운 방 안에 첫 소절이 떠�
 [00:06.000] 가사 타이밍이 어긋날 때는
 [00:09.000] 싱크 버튼으로 0.1초씩 바로 맞출 수 있습니다
 [00:12.000] 슬라이더를 잡으면 모달 배경이 투명해지고
-[00:15.000] 잠시 간주 호흡 표시가 이어집니다
-[00:22.000] 간주가 끝나고 다음 소절이 자연스럽게 시작됩니다
-[00:25.000] 조절하는 동안 주변 소절의 블러도 일시 해제됩니다
-[00:27.500] 짧은 호흡의 구간이 이어집니다
-[00:29.500] 하나
-[00:30.500] 둘
-[00:31.500] 셋
-[00:32.500] 넷
-[00:33.500] 다섯
-[00:36.000] 원하는 소절을 누르면 그 시점으로 바로 이동합니다`;
+[00:14.500] 긴 간주에서는 5초 뒤 호흡 표시가 이어집니다
+[00:26.500] 간주가 끝나고 다음 소절이 자연스럽게 시작됩니다
+[00:29.500] 조절하는 동안 주변 소절의 블러도 일시 해제됩니다
+[00:32.000] 짧은 호흡의 구간이 이어집니다
+[00:34.000] 하나
+[00:35.000] 둘
+[00:36.000] 셋
+[00:37.000] 넷
+[00:38.000] 다섯
+[00:40.500] 원하는 소절을 누르면 그 시점으로 바로 이동합니다`;
 
 export const PREVIEW_ALT_SYNCED_LRC = `[00:00.000] 다른 버전의 싱크 가사를 직접 골라 적용한 화면입니다
 [00:04.000] 상단 가사 선택창에서 앨범과 길이를 비교할 수 있습니다
@@ -324,8 +324,9 @@ export function computeTrackProgressMs(
   return ((raw % PREVIEW_DURATION_MS) + PREVIEW_DURATION_MS) % PREVIEW_DURATION_MS;
 }
 
+export const INTERLUDE_MIN_GAP_MS = 10000;
 export const INTERLUDE_CYCLE_MS = 1800;
-export const INTERLUDE_HOLD_AFTER_VOCAL_MS = 1600;
+export const INTERLUDE_HOLD_AFTER_VOCAL_MS = 5000;
 export const INTERLUDE_EXIT_LEAD_MS = 500;
 
 export function computeInterludeState(
@@ -351,9 +352,14 @@ export function computeInterludeState(
 
   if (activeIndex === -1) {
     const firstTime = lyrics[0].time;
+    const effectiveStart = INTERLUDE_HOLD_AFTER_VOCAL_MS;
     const effectiveEnd = firstTime - INTERLUDE_EXIT_LEAD_MS;
-    if (firstTime >= 4000 && estimatedProgressMs >= 0 && estimatedProgressMs < effectiveEnd) {
-      gapStartMs = 0;
+    if (
+      firstTime >= INTERLUDE_MIN_GAP_MS &&
+      estimatedProgressMs >= effectiveStart &&
+      estimatedProgressMs < effectiveEnd
+    ) {
+      gapStartMs = effectiveStart;
       gapEndMs = effectiveEnd;
       afterLineIndex = -1;
     }
@@ -365,7 +371,7 @@ export function computeInterludeState(
     const effectiveEnd = nextTime - INTERLUDE_EXIT_LEAD_MS;
 
     if (
-      gapDuration >= 6000 &&
+      gapDuration >= INTERLUDE_MIN_GAP_MS &&
       estimatedProgressMs >= effectiveStart &&
       estimatedProgressMs < effectiveEnd
     ) {
@@ -379,7 +385,7 @@ export function computeInterludeState(
     return inactive;
   }
 
-  // Repeat every INTERLUDE_CYCLE_MS (1.8s) regardless of whether the interlude is 6s or 30s
+  // Repeat every INTERLUDE_CYCLE_MS (1.8s) regardless of whether the interlude is 10s or 30s
   const elapsedInInterlude = Math.max(0, estimatedProgressMs - gapStartMs);
   const cyclePhase = (elapsedInInterlude % INTERLUDE_CYCLE_MS) / INTERLUDE_CYCLE_MS;
 
@@ -541,11 +547,251 @@ export function buildSearchQueries(title: string, artist: string): { firstArtist
   };
 }
 
-export function normalizeLrcLibCandidates(items: LrcLibSongItem[]): LrcLibCandidate[] {
+export interface ParsedTitleVersion {
+  baseTitleNorm: string;
+  fullTitleNorm: string;
+  versionNorm: string;
+  versionTags: string[];
+}
+
+function classifyVersionSegment(segment: string): string[] {
+  const tags: string[] = [];
+  if (/\b(instrumental|inst\.?|off\s*vocal|karaoke)\b|반주|인스트/i.test(segment)) {
+    tags.push('instrumental');
+  }
+  if (/\b(live|concert|tour|unplugged\s*live)\b|라이브|콘서트/i.test(segment)) {
+    tags.push('live');
+  }
+  if (/\b(acoustic|unplugged|piano\s*ver|guitar\s*ver)\b|어쿠스틱|언플러그드/i.test(segment)) {
+    tags.push('acoustic');
+  }
+  if (/\b(remix|club\s*mix|vip\s*mix|bootleg)\b|리믹스/i.test(segment)) {
+    tags.push('remix');
+  }
+  if (/\b(radio\s*edit|sped\s*up|speed\s*up|slowed|reverb|nightcore|extended|short\s*ver)\b/i.test(segment)) {
+    tags.push('edit');
+  }
+  if (/\b(remaster(?:ed)?|anniversary)\b|리마스터/i.test(segment)) {
+    tags.push('remaster');
+  }
+  if (/\b(demo|cover|tribute)\b|데모|커버/i.test(segment)) {
+    tags.push('demo_cover');
+  }
+  if (/\b(japanese|jpn|jp\s*ver)\b|일본어/i.test(segment)) {
+    tags.push('lang_jp');
+  }
+  if (/\b(english|eng\s*ver)\b|영어/i.test(segment)) {
+    tags.push('lang_en');
+  }
+  if (/\b(korean|kor\s*ver)\b|한국어/i.test(segment)) {
+    tags.push('lang_kr');
+  }
+  if (/\b(chinese|chn\s*ver)\b|중국어/i.test(segment)) {
+    tags.push('lang_zh');
+  }
+  if (tags.length === 0 && /\b(ver\.?|version|ost|clean|explicit|mix)\b|버전/i.test(segment)) {
+    tags.push('alt_ver');
+  }
+  return tags;
+}
+
+export function parseTitleAndVersion(rawTitle: string | undefined | null): ParsedTitleVersion {
+  if (!rawTitle) {
+    return { baseTitleNorm: '', fullTitleNorm: '', versionNorm: '', versionTags: [] };
+  }
+
+  // Strip featuring credits first so they don't pollute base title or version comparison
+  let working = rawTitle
+    .replace(/[([][\s]*(?:feat\.?|ft\.?|featuring)\b[^)\]]*[)\]]/gi, ' ')
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.+$/gi, ' ');
+
+  const fullTitleNorm = normalizeMatchToken(working);
+  const collectedTagSet = new Set<string>();
+  const versionRawParts: string[] = [];
+
+  // Extract bracketed/parenthetical version modifiers (preserving non-version parens like Korean subtitles)
+  working = working.replace(/[([]([^)\]]+)[)\]]/g, (fullMatch, inner: string) => {
+    const segTags = classifyVersionSegment(inner);
+    if (segTags.length > 0) {
+      segTags.forEach((t) => collectedTagSet.add(t));
+      versionRawParts.push(inner);
+      return ' ';
+    }
+    return fullMatch;
+  });
+
+  // Extract trailing hyphenated version modifiers (e.g., "- 2011 Remaster", "- Live Version")
+  const hyphenMatch = working.match(/^(.*?)\s+-\s+(.+)$/);
+  if (hyphenMatch) {
+    const segTags = classifyVersionSegment(hyphenMatch[2]);
+    if (segTags.length > 0) {
+      segTags.forEach((t) => collectedTagSet.add(t));
+      versionRawParts.push(hyphenMatch[2]);
+      working = hyphenMatch[1];
+    }
+  }
+
+  const baseTitleNorm = normalizeMatchToken(working) || fullTitleNorm;
+  const versionTags = Array.from(collectedTagSet).sort();
+  const versionNorm = normalizeMatchToken(versionRawParts.join(' '));
+
+  return {
+    baseTitleNorm,
+    fullTitleNorm,
+    versionNorm,
+    versionTags,
+  };
+}
+
+export interface LyricMatchContext {
+  targetTitle?: string;
+  targetArtist?: string;
+  targetDurationSec?: number;
+}
+
+interface CandidateRankMetrics {
+  titleTier: number;
+  artistTier: number;
+  versionTier: number;
+  hasSynced: number;
+  exactMmSs: number;
+  durationDiffSec: number;
+}
+
+function evaluateCandidateMetrics(
+  song: {
+    trackName?: string;
+    artistName?: string;
+    duration?: number;
+    syncedLyrics?: string | null;
+  },
+  ctx: LyricMatchContext
+): CandidateRankMetrics {
+  const targetParsed = parseTitleAndVersion(ctx.targetTitle);
+  const candParsed = parseTitleAndVersion(song.trackName);
+
+  // 1. Title tier (3: exact core/full title, 1: partial containment, 0: mismatch)
+  let titleTier = 1;
+  if (targetParsed.baseTitleNorm) {
+    if (candParsed.baseTitleNorm && candParsed.baseTitleNorm === targetParsed.baseTitleNorm) {
+      titleTier = 3;
+    } else if (candParsed.fullTitleNorm && candParsed.fullTitleNorm === targetParsed.fullTitleNorm) {
+      titleTier = 3;
+    } else if (
+      candParsed.baseTitleNorm &&
+      (candParsed.baseTitleNorm.includes(targetParsed.baseTitleNorm) ||
+        targetParsed.baseTitleNorm.includes(candParsed.baseTitleNorm))
+    ) {
+      titleTier = 1;
+    } else {
+      titleTier = 0;
+    }
+  }
+
+  // 2. Artist tier (3: exact full or primary artist, 2: token containment, 0: mismatch)
+  const rawTargetArtist = ctx.targetArtist ?? '';
+  const normFullArtist = normalizeMatchToken(rawTargetArtist);
+  const artistParts = rawTargetArtist
+    .split(/[,&/]/)
+    .map((p) => normalizeMatchToken(p))
+    .filter((p) => p.length > 0);
+  const normFirstArtist = artistParts[0] ?? normFullArtist;
+  const candArtist = normalizeMatchToken(song.artistName);
+
+  let artistTier = 1;
+  if (normFullArtist) {
+    if (candArtist && (candArtist === normFullArtist || candArtist === normFirstArtist)) {
+      artistTier = 3;
+    } else if (
+      candArtist &&
+      artistParts.some((part) => candArtist.includes(part) || part.includes(candArtist))
+    ) {
+      artistTier = 2;
+    } else {
+      artistTier = 0;
+    }
+  }
+
+  // 3. Version tier (4: exact version / both studio original, 3: same canonical version tags, 2: remaster-only diff, 1: version mismatch, 0: unwanted instrumental)
+  const targetIsInst = targetParsed.versionTags.includes('instrumental');
+  const candIsInst = candParsed.versionTags.includes('instrumental');
+  const targetTagKey = targetParsed.versionTags.join('|');
+  const candTagKey = candParsed.versionTags.join('|');
+
+  let versionTier = 3;
+  if (!targetIsInst && candIsInst) {
+    versionTier = 0;
+  } else if (targetTagKey === candTagKey) {
+    if (
+      targetParsed.versionTags.length === 0 ||
+      targetParsed.versionNorm === candParsed.versionNorm
+    ) {
+      versionTier = 4;
+    } else {
+      versionTier = 3;
+    }
+  } else {
+    const nonRemasterTarget = targetParsed.versionTags.filter((t) => t !== 'remaster').join('|');
+    const nonRemasterCand = candParsed.versionTags.filter((t) => t !== 'remaster').join('|');
+    versionTier = nonRemasterTarget === nonRemasterCand ? 2 : 1;
+  }
+
+  // 4. Duration (exact MM:SS match first, then smallest second difference)
+  const targetSec = ctx.targetDurationSec ?? 0;
+  const candSec = typeof song.duration === 'number' && song.duration > 0 ? song.duration : 0;
+  let exactMmSs = 0;
+  let durationDiffSec = Number.POSITIVE_INFINITY;
+
+  if (targetSec > 0 && candSec > 0) {
+    const targetDisplay = formatDurationMs(targetSec * 1000);
+    const candDisplay = formatDurationMs(Math.round(candSec) * 1000);
+    const isSameMmSs =
+      candDisplay === targetDisplay || Math.round(candSec) === Math.round(targetSec);
+    exactMmSs = isSameMmSs ? 1 : 0;
+    durationDiffSec = Math.abs(candSec - targetSec);
+  }
+
+  const hasSynced = song.syncedLyrics && song.syncedLyrics.trim().length > 0 ? 1 : 0;
+
+  return {
+    titleTier,
+    artistTier,
+    versionTier,
+    hasSynced,
+    exactMmSs,
+    durationDiffSec,
+  };
+}
+
+function compareCandidateMetrics(a: CandidateRankMetrics, b: CandidateRankMetrics): number {
+  // Never pick an unwanted instrumental over a vocal track, or a completely different song title
+  const aValidSong = a.titleTier > 0 && a.versionTier > 0 ? 1 : 0;
+  const bValidSong = b.titleTier > 0 && b.versionTier > 0 ? 1 : 0;
+  if (bValidSong !== aValidSong) return bValidSong - aValidSong;
+
+  // Prefer synced lyrics over plain-only lyrics among valid candidates
+  if (b.hasSynced !== a.hasSynced) return b.hasSynced - a.hasSynced;
+
+  // Core user ranking order: 1. Title -> 2. Artist -> 3. Version -> 4. Exact MM:SS -> 5. Closest duration
+  if (b.titleTier !== a.titleTier) return b.titleTier - a.titleTier;
+  if (b.artistTier !== a.artistTier) return b.artistTier - a.artistTier;
+  if (b.versionTier !== a.versionTier) return b.versionTier - a.versionTier;
+  if (b.exactMmSs !== a.exactMmSs) return b.exactMmSs - a.exactMmSs;
+
+  if (a.durationDiffSec !== b.durationDiffSec) {
+    return a.durationDiffSec - b.durationDiffSec;
+  }
+  return 0;
+}
+
+export function normalizeLrcLibCandidates(
+  items: LrcLibSongItem[],
+  context?: LyricMatchContext
+): LrcLibCandidate[] {
   if (!Array.isArray(items)) return [];
 
   const seen = new Set<string>();
-  const result: LrcLibCandidate[] = [];
+  const entries: Array<{ candidate: LrcLibCandidate; metrics: CandidateRankMetrics | null }> = [];
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -557,36 +803,59 @@ export function normalizeLrcLibCandidates(items: LrcLibSongItem[]): LrcLibCandid
     if (seen.has(id)) continue;
     seen.add(id);
 
-    result.push({
-      id,
-      trackName: item.trackName?.trim() || '제목 없음',
-      artistName: item.artistName?.trim() || 'Unknown Artist',
-      albumName: item.albumName?.trim() || '',
-      durationSec: typeof item.duration === 'number' ? Math.round(item.duration) : 0,
-      hasSynced: Boolean(synced),
-      hasPlain: Boolean(plain),
-      syncedLyrics: synced,
-      plainLyrics: plain,
+    entries.push({
+      candidate: {
+        id,
+        trackName: item.trackName?.trim() || '제목 없음',
+        artistName: item.artistName?.trim() || 'Unknown Artist',
+        albumName: item.albumName?.trim() || '',
+        durationSec: typeof item.duration === 'number' ? Math.round(item.duration) : 0,
+        hasSynced: Boolean(synced),
+        hasPlain: Boolean(plain),
+        syncedLyrics: synced,
+        plainLyrics: plain,
+      },
+      metrics: context ? evaluateCandidateMetrics(item, context) : null,
     });
   }
 
-  // Sort synced candidates ahead of plain-only candidates
-  result.sort((a, b) => Number(b.hasSynced) - Number(a.hasSynced));
-  return result;
+  entries.sort((a, b) => {
+    if (a.metrics && b.metrics) {
+      return compareCandidateMetrics(a.metrics, b.metrics);
+    }
+    return Number(b.candidate.hasSynced) - Number(a.candidate.hasSynced);
+  });
+
+  return entries.map((e) => e.candidate);
 }
 
 export function selectBestLyricsFromCandidates(
   songs: LrcLibSongItem[],
   queryStr: string,
   targetArtist: string,
-  targetDurationSec: number
+  targetDurationSec: number,
+  targetTitle?: string
 ): { type: 'synced' | 'plain'; text: string; selectedId?: string } | null {
   if (!Array.isArray(songs) || songs.length === 0) return null;
 
-  const expectedArtist = normalizeMatchToken(targetArtist);
+  const firstArtistOnly = targetArtist.split(',')[0].trim();
+  const expectedArtist = normalizeMatchToken(firstArtistOnly);
   const normalizedQuery = normalizeMatchToken(queryStr);
 
+  // Derive fallback title from queryStr when explicit targetTitle is omitted
+  const inferredTitle =
+    targetTitle !== undefined
+      ? targetTitle
+      : firstArtistOnly && queryStr.toLowerCase().endsWith(firstArtistOnly.toLowerCase())
+        ? queryStr.slice(0, queryStr.length - firstArtistOnly.length).trim()
+        : queryStr;
+
   const validSongs = songs.filter((song) => {
+    const hasLyrics =
+      Boolean(song.syncedLyrics && song.syncedLyrics.trim().length > 0) ||
+      Boolean(song.plainLyrics && song.plainLyrics.trim().length > 0);
+    if (!hasLyrics) return false;
+
     const apiArtist = normalizeMatchToken(song.artistName);
     const isArtistMatch =
       expectedArtist.length > 0 &&
@@ -604,21 +873,39 @@ export function selectBestLyricsFromCandidates(
 
   if (validSongs.length === 0) return null;
 
-  const synced = validSongs.find((song) => song.syncedLyrics && song.syncedLyrics.trim().length > 0);
-  if (synced && synced.syncedLyrics) {
+  const ctx: LyricMatchContext = {
+    targetTitle: inferredTitle,
+    targetArtist,
+    targetDurationSec,
+  };
+
+  const ranked = validSongs
+    .map((song, idx) => ({
+      song,
+      idx,
+      metrics: evaluateCandidateMetrics(song, ctx),
+    }))
+    .sort((a, b) => {
+      const cmp = compareCandidateMetrics(a.metrics, b.metrics);
+      return cmp !== 0 ? cmp : a.idx - b.idx;
+    });
+
+  const winner = ranked[0]?.song;
+  if (!winner) return null;
+
+  if (winner.syncedLyrics && winner.syncedLyrics.trim().length > 0) {
     return {
       type: 'synced',
-      text: synced.syncedLyrics,
-      selectedId: synced.id !== undefined ? `lrclib-${synced.id}` : undefined,
+      text: winner.syncedLyrics,
+      selectedId: winner.id !== undefined ? `lrclib-${winner.id}` : undefined,
     };
   }
 
-  const plain = validSongs.find((song) => song.plainLyrics && song.plainLyrics.trim().length > 0);
-  if (plain && plain.plainLyrics) {
+  if (winner.plainLyrics && winner.plainLyrics.trim().length > 0) {
     return {
       type: 'plain',
-      text: plain.plainLyrics,
-      selectedId: plain.id !== undefined ? `lrclib-${plain.id}` : undefined,
+      text: winner.plainLyrics,
+      selectedId: winner.id !== undefined ? `lrclib-${winner.id}` : undefined,
     };
   }
 

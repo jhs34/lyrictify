@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Disc3 } from 'lucide-react';
 import { LyricLine, NumericSettingKey, TrackMetadata, UISettings, ViewerStatus } from '../types/lyrics';
 import {
+  INTERLUDE_MIN_GAP_MS,
   computeInterludeState,
   computeLyricVisualStyle,
   computeTrackProgressMs,
@@ -57,15 +58,15 @@ export function LyricsViewport({
     setSplitImgFailed(false);
   }, [track?.albumArtUrl]);
 
-  // Identify indices that precede a >= 6s instrumental interlude (or >= 4s intro at -1)
+  // Identify indices that precede a >= 10s instrumental interlude (or >= 10s intro at -1)
   const interludeGapIndices = useMemo(() => {
     const indices = new Set<number>();
     if (isPlainLyrics || lyrics.length === 0) return indices;
-    if (lyrics[0].time >= 4000) {
+    if (lyrics[0].time >= INTERLUDE_MIN_GAP_MS) {
       indices.add(-1);
     }
     for (let i = 0; i < lyrics.length - 1; i++) {
-      if (lyrics[i + 1].time - lyrics[i].time >= 6000) {
+      if (lyrics[i + 1].time - lyrics[i].time >= INTERLUDE_MIN_GAP_MS) {
         indices.add(i);
       }
     }
@@ -92,6 +93,7 @@ export function LyricsViewport({
   const targetManualOffsetRef = useRef<number>(0);
   const manualOffsetRef = useRef<number>(0);
   const plainScrollYRef = useRef<number>(0);
+  const lastManualTransformRef = useRef<string>('translateY(0px)');
   const isTouchDraggingRef = useRef<boolean>(false);
   const touchStartYRef = useRef<number>(0);
   const touchStartBaseRef = useRef<number>(0);
@@ -121,16 +123,39 @@ export function LyricsViewport({
     for (let i = 0; i < lines.length; i++) {
       const el = lines[i];
       if (!el) continue;
-      const { blurPx, opacity, isActive } = computeLyricVisualStyle(i, activeIdx, {
-        isPlainLyrics: plain,
-        forceClearBlur,
-        blurIntensity: currentSettings.blurAmount,
-      });
-      el.style.filter = `blur(${blurPx}px)`;
-      el.style.opacity = String(opacity);
+
+      const isFarOffscreen =
+        !plain &&
+        !forceClearBlur &&
+        (activeIdx === -1 ? i > 14 : Math.abs(i - activeIdx) > 9);
+
+      let blurPx = 0;
+      let opacity = 0;
+      let isActive = false;
+
+      if (!isFarOffscreen) {
+        const computed = computeLyricVisualStyle(i, activeIdx, {
+          isPlainLyrics: plain,
+          forceClearBlur,
+          blurIntensity: currentSettings.blurAmount,
+        });
+        blurPx = computed.blurPx;
+        opacity = computed.opacity;
+        isActive = computed.isActive;
+      }
+
+      const nextFilter = blurPx <= 0.05 ? 'none' : `blur(${blurPx}px)`;
+      const nextOpacity = String(opacity);
+
+      if (el.style.filter !== nextFilter) {
+        el.style.filter = nextFilter;
+      }
+      if (el.style.opacity !== nextOpacity) {
+        el.style.opacity = nextOpacity;
+      }
       if (isActive) {
-        el.classList.add('active');
-      } else {
+        if (!el.classList.contains('active')) el.classList.add('active');
+      } else if (el.classList.contains('active')) {
         el.classList.remove('active');
       }
     }
@@ -218,6 +243,7 @@ export function LyricsViewport({
 
     if (manualScrollRef.current) {
       manualScrollRef.current.style.transform = 'translateY(0px)';
+      lastManualTransformRef.current = 'translateY(0px)';
     }
     if (introWrapRef.current) {
       introWrapRef.current.style.setProperty('--delay', '0s');
@@ -352,8 +378,11 @@ export function LyricsViewport({
         if (pb.isPlaying && !isManualScrollingRef.current && currentLyrics.length > 0) {
           plainScrollYRef.current += currentSettings.plainSpeed * (deltaTime / 1000);
         }
-        if (manualScrollRef.current) {
-          manualScrollRef.current.style.transform = `translateY(-${plainScrollYRef.current}px)`;
+        const roundedPlain = Math.round(plainScrollYRef.current * 100) / 100;
+        const nextTransform = `translateY(${-roundedPlain}px)`;
+        if (manualScrollRef.current && lastManualTransformRef.current !== nextTransform) {
+          manualScrollRef.current.style.transform = nextTransform;
+          lastManualTransformRef.current = nextTransform;
         }
       } else {
         if (!isManualScrollingRef.current && Math.abs(targetManualOffsetRef.current) > 0.5) {
@@ -364,9 +393,15 @@ export function LyricsViewport({
 
         manualOffsetRef.current +=
           (targetManualOffsetRef.current - manualOffsetRef.current) * 0.12;
+        if (Math.abs(manualOffsetRef.current) < 0.08 && targetManualOffsetRef.current === 0) {
+          manualOffsetRef.current = 0;
+        }
 
-        if (manualScrollRef.current) {
-          manualScrollRef.current.style.transform = `translateY(-${manualOffsetRef.current}px)`;
+        const roundedManual = Math.round(manualOffsetRef.current * 100) / 100;
+        const nextTransform = `translateY(${-roundedManual}px)`;
+        if (manualScrollRef.current && lastManualTransformRef.current !== nextTransform) {
+          manualScrollRef.current.style.transform = nextTransform;
+          lastManualTransformRef.current = nextTransform;
         }
 
         if (currentLyrics.length > 0) {
@@ -552,7 +587,7 @@ export function LyricsViewport({
           <div
             ref={manualScrollRef}
             id="manual-scroll-container"
-            className="w-full will-change-transform"
+            className="w-full"
           >
             <div
               ref={contentRef}
