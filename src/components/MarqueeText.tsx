@@ -32,11 +32,11 @@ export function MarqueeText({
     setIsOverflowing((prev) => (prev === metrics.isOverflowing ? prev : metrics.isOverflowing));
 
     if (metrics.isOverflowing) {
-      trackEl.style.setProperty('--marquee-offset', `${metrics.slideOffsetPx}px`);
-      trackEl.style.setProperty('--marquee-duration', `${metrics.durationSec}s`);
+      container.style.setProperty('--marquee-offset', `${metrics.slideOffsetPx}px`);
+      container.style.setProperty('--marquee-duration', `${metrics.durationSec}s`);
     } else {
-      trackEl.style.removeProperty('--marquee-offset');
-      trackEl.style.removeProperty('--marquee-duration');
+      container.style.removeProperty('--marquee-offset');
+      container.style.removeProperty('--marquee-duration');
     }
   }, []);
 

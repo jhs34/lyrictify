@@ -21,19 +21,19 @@ function OverflowMarqueeText({ text, className = '' }: OverflowMarqueeTextProps)
 
     const measure = () => {
       const hasMask = container.classList.contains('lyric-marquee-mask');
-      const availableWidth = container.clientWidth - (hasMask ? 24 : 0);
+      const availableWidth = container.clientWidth - (hasMask ? 14 : 0);
       const naturalWidth = textEl.scrollWidth;
       const overflowPx = Math.ceil(naturalWidth - Math.max(0, availableWidth));
 
       if (overflowPx > 2) {
-        const slideDistance = overflowPx + 6;
+        const slideDistance = overflowPx + 14;
         const durationSec = Math.max(5.5, Math.min(14, 3.8 + slideDistance / 28));
-        textEl.style.setProperty('--marquee-offset', `${slideDistance}px`);
-        textEl.style.setProperty('--marquee-duration', `${durationSec.toFixed(2)}s`);
+        container.style.setProperty('--marquee-offset', `${slideDistance}px`);
+        container.style.setProperty('--marquee-duration', `${durationSec.toFixed(2)}s`);
         setIsOverflowing(true);
       } else {
-        textEl.style.removeProperty('--marquee-offset');
-        textEl.style.removeProperty('--marquee-duration');
+        container.style.removeProperty('--marquee-offset');
+        container.style.removeProperty('--marquee-duration');
         setIsOverflowing(false);
       }
     };

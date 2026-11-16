@@ -1,15 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Disc3, ListMusic } from 'lucide-react';
 import { LyricLine, NumericSettingKey, TrackMetadata, UISettings, ViewerStatus } from '../types/lyrics';
 import { MarqueeText } from './MarqueeText';
 import { MediaControls } from './MediaControls';
 import {
   INTERLUDE_MIN_GAP_MS,
+  LYRIC_LINE_DEACTIVATE_DURATION_MS,
+  LYRIC_WAVE_RAMP_IN_MS,
+  LyricWordToken,
+  WordVisualPosition,
+  buildWordEntranceSpec,
+  buildWordWaveSpec,
   computeInterludeState,
   computeLyricVisualStyle,
   computeTrackProgressMs,
+  computeWordVisualPositions,
   findActiveLyricIndex,
+  tokenizeLyricWords,
 } from '../utils/lyrics';
+import { applySettingsToDocumentCss } from '../utils/storage';
 
 interface LyricsViewportProps {
   status: ViewerStatus;
@@ -63,6 +72,8 @@ export function LyricsViewport({
   const contentRef = useRef<HTMLDivElement | null>(null);
   const wrapElsRef = useRef<Array<HTMLDivElement | null>>([]);
   const lineElsRef = useRef<Array<HTMLElement | null>>([]);
+  const wordEnterElsRef = useRef<Array<Array<HTMLSpanElement | null>>>([]);
+  const wordWaveElsRef = useRef<Array<Array<HTMLSpanElement | null>>>([]);
   const introWrapRef = useRef<HTMLDivElement | null>(null);
   const interludeSlotRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
@@ -71,6 +82,301 @@ export function LyricsViewport({
   useEffect(() => {
     setSplitImgFailed(false);
   }, [track?.albumArtUrl]);
+
+  const tokenizedLines = useMemo<LyricWordToken[][]>(() => {
+    if (isPlainLyrics || lyrics.length === 0) return [];
+    return lyrics.map((line) => tokenizeLyricWords(line.text));
+  }, [lyrics, isPlainLyrics]);
+
+  const tokenizedLinesRef = useRef<LyricWordToken[][]>(tokenizedLines);
+  tokenizedLinesRef.current = tokenizedLines;
+
+  const activeLineAnimsRef = useRef<
+    Map<
+      number,
+      {
+        enterAnims: Animation[];
+        waveAnims: Animation[];
+        layoutSignature: string;
+        settleTimer: number | null;
+      }
+    >
+  >(new Map());
+  const activeFilterReleaseTimerRef = useRef<number | null>(null);
+  const waveRateRef = useRef<number>(isPlaying ? 1 : 0);
+  const reducedMotionRef = useRef<boolean>(false);
+
+  const cancelLineWordMotion = useCallback((lineIdx: number) => {
+    const existing = activeLineAnimsRef.current.get(lineIdx);
+    if (!existing) return;
+    if (existing.settleTimer !== null) {
+      window.clearTimeout(existing.settleTimer);
+    }
+    existing.enterAnims.forEach((a) => a.cancel());
+    existing.waveAnims.forEach((a) => a.cancel());
+    lineElsRef.current[lineIdx]?.classList.remove('is-settling');
+    activeLineAnimsRef.current.delete(lineIdx);
+  }, []);
+
+  const clearAllLineMotionDom = useCallback(() => {
+    if (activeFilterReleaseTimerRef.current !== null) {
+      window.clearTimeout(activeFilterReleaseTimerRef.current);
+      activeFilterReleaseTimerRef.current = null;
+    }
+    activeLineAnimsRef.current.forEach((_, lineIdx) => {
+      cancelLineWordMotion(lineIdx);
+    });
+    activeLineAnimsRef.current.clear();
+  }, [cancelLineWordMotion]);
+
+  const measureLineWordPositions = useCallback(
+    (lineIdx: number, fontSize: number): { positions: WordVisualPosition[]; signature: string } => {
+      const words = tokenizedLinesRef.current[lineIdx] ?? [];
+      const enterEls = wordEnterElsRef.current[lineIdx] ?? [];
+      const boxes = words.map((_, idx) => {
+        const el = enterEls[idx];
+        return el
+          ? {
+              offsetLeft: el.offsetLeft,
+              offsetTop: el.offsetTop,
+              offsetWidth: el.offsetWidth,
+            }
+          : { offsetLeft: 0, offsetTop: 0, offsetWidth: 0 };
+      });
+      const fallbackCols = words.map((w) => w.centerCol);
+      const positions = computeWordVisualPositions(boxes, fallbackCols, fontSize);
+      const signature = `${fontSize}|${positions
+        .map((p) => `${p.rowIndex}:${Math.round(p.visualCol * 2)}`)
+        .join(',')}`;
+      return { positions, signature };
+    },
+    []
+  );
+
+  const spawnWaveAnimationsForLine = useCallback(
+    (
+      waveEls: Array<HTMLSpanElement | null>,
+      positions: WordVisualPosition[],
+      fontSize: number,
+      initialRate: number,
+      priorWaveYs?: number[]
+    ): Animation[] => {
+      const waveAnims: Animation[] = [];
+      for (let wIdx = 0; wIdx < positions.length; wIdx++) {
+        const waveEl = waveEls[wIdx];
+        if (!waveEl || typeof waveEl.animate !== 'function') continue;
+
+        const pos = positions[wIdx];
+        const waveSpec = buildWordWaveSpec(pos.visualCol, fontSize, pos.rowIndex);
+        // Negative delay puts every word across all wrapped rows into immediate 2D diagonal wave phase from t=0
+        const startDelayMs =
+          waveSpec.phaseOffsetMs > 0 ? -(waveSpec.periodMs - waveSpec.phaseOffsetMs) : 0;
+        const wAnim = waveEl.animate(waveSpec.keyframes, {
+          duration: waveSpec.periodMs,
+          delay: startDelayMs,
+          iterations: Infinity,
+          fill: 'both',
+        });
+        wAnim.playbackRate = initialRate;
+        waveAnims.push(wAnim);
+
+        // Smoothly blend from priorWaveY (0px on fresh line activation) into the live 2D wave phase with zero snap
+        const computedTf = window.getComputedStyle(waveEl).transform;
+        const initialWaveY =
+          computedTf && computedTf !== 'none' && typeof DOMMatrix === 'function'
+            ? new DOMMatrix(computedTf).m42
+            : 0;
+        const fromY = priorWaveYs ? (priorWaveYs[wIdx] ?? 0) : 0;
+        const deltaY = fromY - initialWaveY;
+        if (Math.abs(deltaY) > 0.01) {
+          const rampAnim = waveEl.animate(
+            [
+              { transform: `translate3d(0, ${Math.round(deltaY * 1000) / 1000}px, 0)` },
+              { transform: 'translate3d(0, 0px, 0)' },
+            ],
+            {
+              duration: LYRIC_WAVE_RAMP_IN_MS,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+              fill: 'both',
+              composite: 'add',
+            }
+          );
+          rampAnim.playbackRate = initialRate;
+          waveAnims.push(rampAnim);
+        }
+      }
+      return waveAnims;
+    },
+    []
+  );
+
+  const startLineWordMotion = useCallback(
+    (lineIdx: number) => {
+      if (reducedMotionRef.current || isPlainRef.current || lineIdx < 0) return;
+      cancelLineWordMotion(lineIdx);
+
+      const words = tokenizedLinesRef.current[lineIdx];
+      const enterEls = wordEnterElsRef.current[lineIdx];
+      const waveEls = wordWaveElsRef.current[lineIdx];
+      if (!words || words.length === 0 || !enterEls || !waveEls) return;
+
+      lineElsRef.current[lineIdx]?.classList.remove('is-settling');
+
+      const fontSize = settingsRef.current.fontSize;
+      const initialRate = Math.round(waveRateRef.current * 1000) / 1000;
+      const { positions, signature } = measureLineWordPositions(lineIdx, fontSize);
+      const enterAnims: Animation[] = [];
+
+      for (let wIdx = 0; wIdx < words.length; wIdx++) {
+        const enterEl = enterEls[wIdx];
+        if (enterEl && typeof enterEl.animate === 'function') {
+          const enterSpec = buildWordEntranceSpec(wIdx, fontSize);
+          const eAnim = enterEl.animate(enterSpec.keyframes, {
+            duration: enterSpec.durationMs,
+            delay: enterSpec.delayMs,
+            easing: enterSpec.easing,
+            fill: 'both',
+          });
+          enterAnims.push(eAnim);
+        }
+      }
+
+      const waveAnims = spawnWaveAnimationsForLine(waveEls, positions, fontSize, initialRate);
+
+      activeLineAnimsRef.current.set(lineIdx, {
+        enterAnims,
+        waveAnims,
+        layoutSignature: signature,
+        settleTimer: null,
+      });
+    },
+    [cancelLineWordMotion, measureLineWordPositions, spawnWaveAnimationsForLine]
+  );
+
+  const syncActiveLineWaveLayout = useCallback(() => {
+    const lineIdx = activeIndexRef.current;
+    if (reducedMotionRef.current || isPlainRef.current || lineIdx < 0) return;
+    const existing = activeLineAnimsRef.current.get(lineIdx);
+    if (!existing || existing.settleTimer !== null) return;
+
+    const waveEls = wordWaveElsRef.current[lineIdx];
+    if (!waveEls || waveEls.length === 0) return;
+
+    const fontSize = settingsRef.current.fontSize;
+    const { positions, signature } = measureLineWordPositions(lineIdx, fontSize);
+    if (signature === existing.layoutSignature) return;
+
+    const priorWaveYs = waveEls.map((el) => {
+      if (!el || typeof DOMMatrix !== 'function') return 0;
+      const tf = window.getComputedStyle(el).transform;
+      return tf && tf !== 'none' ? new DOMMatrix(tf).m42 : 0;
+    });
+
+    existing.waveAnims.forEach((a) => a.cancel());
+    const currentRate = Math.round(waveRateRef.current * 1000) / 1000;
+    existing.waveAnims = spawnWaveAnimationsForLine(
+      waveEls,
+      positions,
+      fontSize,
+      currentRate,
+      priorWaveYs
+    );
+    existing.layoutSignature = signature;
+  }, [measureLineWordPositions, spawnWaveAnimationsForLine]);
+
+  const settleOutLineWordMotion = useCallback((lineIdx: number) => {
+    const existing = activeLineAnimsRef.current.get(lineIdx);
+    if (!existing) return;
+    if (existing.settleTimer !== null) return;
+
+    const enterEls = wordEnterElsRef.current[lineIdx];
+    const waveEls = wordWaveElsRef.current[lineIdx];
+    const lineEl = lineElsRef.current[lineIdx];
+
+    const enterSnapshots = (enterEls ?? []).map((el) =>
+      el ? window.getComputedStyle(el).transform : 'none'
+    );
+    const waveSnapshots = (waveEls ?? []).map((el) =>
+      el ? window.getComputedStyle(el).transform : 'none'
+    );
+
+    existing.enterAnims.forEach((a) => a.cancel());
+    existing.waveAnims.forEach((a) => a.cancel());
+    lineEl?.classList.add('is-settling');
+
+    const settleEnterAnims: Animation[] = [];
+    const settleWaveAnims: Animation[] = [];
+
+    if (enterEls) {
+      for (let i = 0; i < enterEls.length; i++) {
+        const el = enterEls[i];
+        const fromTf = enterSnapshots[i];
+        if (!el || !fromTf || fromTf === 'none' || typeof el.animate !== 'function') continue;
+        settleEnterAnims.push(
+          el.animate(
+            [{ transform: fromTf }, { transform: 'translate3d(0, 0px, 0) scale(1)' }],
+            {
+              duration: LYRIC_LINE_DEACTIVATE_DURATION_MS,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            }
+          )
+        );
+      }
+    }
+
+    if (waveEls) {
+      for (let i = 0; i < waveEls.length; i++) {
+        const el = waveEls[i];
+        const fromTf = waveSnapshots[i];
+        if (!el || !fromTf || fromTf === 'none' || typeof el.animate !== 'function') continue;
+        settleWaveAnims.push(
+          el.animate(
+            [{ transform: fromTf }, { transform: 'translate3d(0, 0px, 0)' }],
+            {
+              duration: LYRIC_LINE_DEACTIVATE_DURATION_MS,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            }
+          )
+        );
+      }
+    }
+
+    const settleTimer = window.setTimeout(() => {
+      settleEnterAnims.forEach((a) => a.cancel());
+      settleWaveAnims.forEach((a) => a.cancel());
+      lineEl?.classList.remove('is-settling');
+      activeLineAnimsRef.current.delete(lineIdx);
+    }, LYRIC_LINE_DEACTIVATE_DURATION_MS + 30);
+
+    activeLineAnimsRef.current.set(lineIdx, {
+      enterAnims: settleEnterAnims,
+      waveAnims: settleWaveAnims,
+      layoutSignature: '',
+      settleTimer,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotionRef.current = mq.matches;
+    const onChange = (e: MediaQueryListEvent) => {
+      reducedMotionRef.current = e.matches;
+      if (e.matches) {
+        clearAllLineMotionDom();
+      } else if (activeIndexRef.current >= 0) {
+        startLineWordMotion(activeIndexRef.current);
+      }
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [clearAllLineMotionDom, startLineWordMotion]);
+
+  useEffect(() => {
+    return () => {
+      clearAllLineMotionDom();
+    };
+  }, [clearAllLineMotionDom]);
 
   // Identify indices that precede a >= 10s instrumental interlude (or >= 10s intro at -1)
   const interludeGapIndices = useMemo(() => {
@@ -159,11 +465,13 @@ export function LyricsViewport({
         isActive = computed.isActive;
       }
 
-      // Keep blur(0px) on the active synced line so transitioning blur(1.25px) <-> blur(0px) never tears down Skia's FilterEffect texture 500ms later
-      const keepActiveFilterSurface =
-        isActive && !plain && !forceClearBlur && currentSettings.blurAmount > 0;
+      const wasBlurred = el.style.filter !== '' && el.style.filter !== 'none';
       const nextFilter =
-        blurPx <= 0.05 ? (keepActiveFilterSurface ? 'blur(0px)' : 'none') : `blur(${blurPx}px)`;
+        blurPx <= 0.05
+          ? isActive && wasBlurred && !plain && !forceClearBlur
+            ? 'blur(0px)'
+            : 'none'
+          : `blur(${blurPx}px)`;
       const nextOpacity = String(opacity);
 
       if (el.style.filter !== nextFilter) {
@@ -174,6 +482,19 @@ export function LyricsViewport({
       }
       if (isActive) {
         if (!el.classList.contains('active')) el.classList.add('active');
+        if (nextFilter === 'blur(0px)') {
+          if (activeFilterReleaseTimerRef.current !== null) {
+            window.clearTimeout(activeFilterReleaseTimerRef.current);
+          }
+          const capturedIdx = i;
+          activeFilterReleaseTimerRef.current = window.setTimeout(() => {
+            activeFilterReleaseTimerRef.current = null;
+            const activeEl = lineElsRef.current[capturedIdx];
+            if (activeEl && activeIndexRef.current === capturedIdx) {
+              activeEl.style.filter = 'none';
+            }
+          }, 520);
+        }
       } else if (el.classList.contains('active')) {
         el.classList.remove('active');
       }
@@ -239,21 +560,37 @@ export function LyricsViewport({
         const translateY = restingOffsetTop - wrapper.clientHeight * vertRatio + anchorHeight / 2;
         const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
         if (introWrapRef.current) {
+          introWrapRef.current.style.transition = 'none';
           introWrapRef.current.style.setProperty('--delay', '0s');
           introWrapRef.current.style.transform = targetTransform;
         }
         for (const wrap of wrapElsRef.current) {
           if (!wrap) continue;
+          wrap.style.transition = 'none';
           wrap.style.setProperty('--delay', '0s');
           wrap.style.transform = targetTransform;
+        }
+        // Flush computed transform while transition is 'none' so fontSize/layout changes reposition in 0ms without drifting off-screen
+        if (introWrapRef.current) {
+          void window.getComputedStyle(introWrapRef.current).transform;
+          introWrapRef.current.style.transition = '';
+        }
+        for (const wrap of wrapElsRef.current) {
+          if (!wrap) continue;
+          void window.getComputedStyle(wrap).transform;
+          wrap.style.transition = '';
         }
       }
     }
   }, [getCollapsingInterludeHeightAbove]);
 
   useLayoutEffect(() => {
+    applySettingsToDocumentCss(settingsRef.current);
+    clearAllLineMotionDom();
     wrapElsRef.current = wrapElsRef.current.slice(0, lyrics.length);
     lineElsRef.current = lineElsRef.current.slice(0, lyrics.length);
+    wordEnterElsRef.current = wordEnterElsRef.current.slice(0, lyrics.length);
+    wordWaveElsRef.current = wordWaveElsRef.current.slice(0, lyrics.length);
     activeIndexRef.current = -1;
     lastInterludeKeyRef.current = '';
     targetManualOffsetRef.current = 0;
@@ -266,39 +603,63 @@ export function LyricsViewport({
       lastManualTransformRef.current = 'translate3d(0, 0px, 0)';
     }
     if (introWrapRef.current) {
+      introWrapRef.current.style.transition = 'none';
       introWrapRef.current.style.setProperty('--delay', '0s');
       introWrapRef.current.style.transform = 'translate3d(0, 0px, 0)';
+      void window.getComputedStyle(introWrapRef.current).transform;
+      introWrapRef.current.style.transition = '';
     }
     for (const wrap of wrapElsRef.current) {
       if (wrap) {
+        wrap.style.transition = 'none';
         wrap.style.setProperty('--delay', '0s');
         wrap.style.transform = 'translate3d(0, 0px, 0)';
+        void window.getComputedStyle(wrap).transform;
+        wrap.style.transition = '';
       }
     }
 
     alignLinesImmediately();
     applyLineVisualStyles(-1);
-  }, [lyrics, isPlainLyrics, status, alignLinesImmediately, applyLineVisualStyles]);
+  }, [
+    lyrics,
+    isPlainLyrics,
+    status,
+    alignLinesImmediately,
+    applyLineVisualStyles,
+    clearAllLineMotionDom,
+  ]);
 
+  // Apply updated CSS custom properties BEFORE measuring DOM offsets (child useLayoutEffect runs before parent App useLayoutEffect)
   useLayoutEffect(() => {
+    applySettingsToDocumentCss(settingsRef.current);
     alignLinesImmediately();
-    applyLineVisualStyles(activeIndexRef.current);
+    syncActiveLineWaveLayout();
   }, [
     settings.vertPos,
     settings.fontSize,
     settings.lineHeight,
     settings.margin,
-    settings.blurAmount,
     isDesktopSplitActive,
-    draggingSliderKey,
     alignLinesImmediately,
+    syncActiveLineWaveLayout,
+  ]);
+
+  useLayoutEffect(() => {
+    applyLineVisualStyles(activeIndexRef.current);
+  }, [
+    settings.blurAmount,
+    draggingSliderKey,
     applyLineVisualStyles,
   ]);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper || typeof ResizeObserver === 'undefined') {
-      const onResize = () => alignLinesImmediately();
+      const onResize = () => {
+        alignLinesImmediately();
+        syncActiveLineWaveLayout();
+      };
       window.addEventListener('resize', onResize);
       return () => window.removeEventListener('resize', onResize);
     }
@@ -312,18 +673,19 @@ export function LyricsViewport({
     const observer = new ResizeObserver(() => {
       const nextW = wrapper.clientWidth;
       const nextH = wrapper.clientHeight;
-      if (
-        nextW === lastWrapperSizeRef.current.w &&
-        nextH === lastWrapperSizeRef.current.h
-      ) {
+      const widthChanged = nextW !== lastWrapperSizeRef.current.w;
+      if (!widthChanged && nextH === lastWrapperSizeRef.current.h) {
         return;
       }
       lastWrapperSizeRef.current = { w: nextW, h: nextH };
       alignLinesImmediately();
+      if (widthChanged) {
+        syncActiveLineWaveLayout();
+      }
     });
     observer.observe(wrapper);
     return () => observer.disconnect();
-  }, [status, isDesktopSplitActive, alignLinesImmediately]);
+  }, [status, isDesktopSplitActive, alignLinesImmediately, syncActiveLineWaveLayout]);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -451,6 +813,7 @@ export function LyricsViewport({
           lastRawProgressRef.current = rawTrackProgress;
 
           if (didLoopWrap) {
+            clearAllLineMotionDom();
             activeIndexRef.current = -1;
             if (introWrapRef.current) {
               introWrapRef.current.style.setProperty('--delay', '0s');
@@ -469,6 +832,11 @@ export function LyricsViewport({
           const newActiveIndex = findActiveLyricIndex(currentLyrics, estimatedProgress);
 
           if (newActiveIndex !== activeIndexRef.current) {
+            const prevActiveIdx = activeIndexRef.current;
+            if (prevActiveIdx >= 0) {
+              settleOutLineWordMotion(prevActiveIdx);
+            }
+
             if (newActiveIndex === -1) {
               activeIndexRef.current = -1;
               if (introWrapRef.current) {
@@ -492,6 +860,7 @@ export function LyricsViewport({
               const wrapper = wrapperRef.current;
               if (activeWrap && wrapper) {
                 applyLineVisualStyles(newActiveIndex);
+                startLineWordMotion(newActiveIndex);
                 // Update interlude DOM first so any slot above newActiveIndex marks data-active="false"
                 updateInterludeDom(estimatedProgress, pb.isPlaying);
 
@@ -525,6 +894,24 @@ export function LyricsViewport({
             }
           }
 
+          // Smoothly ramp GPU compositor wave playbackRate on Play <-> Pause transitions without main-thread transform churn
+          const targetRate = pb.isPlaying && !reducedMotionRef.current ? 1 : 0;
+          if (waveRateRef.current !== targetRate) {
+            const rateAlpha = 1 - Math.exp(-deltaTime / 220);
+            let nextRate = waveRateRef.current + (targetRate - waveRateRef.current) * rateAlpha;
+            if (Math.abs(targetRate - nextRate) < 0.004) {
+              nextRate = targetRate;
+            }
+            waveRateRef.current = nextRate;
+            const curAnimEntry = activeLineAnimsRef.current.get(activeIndexRef.current);
+            if (curAnimEntry && curAnimEntry.settleTimer === null) {
+              const roundedRate = Math.round(nextRate * 1000) / 1000;
+              for (let i = 0; i < curAnimEntry.waveAnims.length; i++) {
+                curAnimEntry.waveAnims[i].playbackRate = roundedRate;
+              }
+            }
+          }
+
           updateInterludeDom(estimatedProgress, pb.isPlaying);
         }
       }
@@ -534,7 +921,14 @@ export function LyricsViewport({
 
     rafId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(rafId);
-  }, [applyLineVisualStyles, getCollapsingInterludeHeightAbove, updateInterludeDom]);
+  }, [
+    applyLineVisualStyles,
+    clearAllLineMotionDom,
+    getCollapsingInterludeHeightAbove,
+    settleOutLineWordMotion,
+    startLineWordMotion,
+    updateInterludeDom,
+  ]);
 
   const handleLineClick = (timeMs: number) => {
     if (isTouchDraggingRef.current || isPlainLyrics) return;
@@ -699,13 +1093,45 @@ export function LyricsViewport({
                   ) : (
                     <button
                       type="button"
+                      aria-label={lyric.text}
                       ref={(el) => {
                         lineElsRef.current[index] = el;
                       }}
                       onClick={() => handleLineClick(lyric.time)}
                       className="lyric-line cursor-pointer bg-transparent border-0 p-0 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--text-primary)] rounded-lg"
                     >
-                      {lyric.text}
+                      <span aria-hidden="true" className="lyric-line-tokens">
+                        {(tokenizedLines[index] ?? []).map((wToken, wIdx) => (
+                          <Fragment key={wIdx}>
+                            {wToken.hasLeadingSpace && ' '}
+                            <span
+                              ref={(el) => {
+                                let arr = wordEnterElsRef.current[index];
+                                if (!arr) {
+                                  arr = [];
+                                  wordEnterElsRef.current[index] = arr;
+                                }
+                                arr[wIdx] = el;
+                              }}
+                              className="lyric-word-enter"
+                            >
+                              <span
+                                ref={(el) => {
+                                  let wArr = wordWaveElsRef.current[index];
+                                  if (!wArr) {
+                                    wArr = [];
+                                    wordWaveElsRef.current[index] = wArr;
+                                  }
+                                  wArr[wIdx] = el;
+                                }}
+                                className="lyric-word-wave"
+                              >
+                                {wToken.word}
+                              </span>
+                            </span>
+                          </Fragment>
+                        ))}
+                      </span>
                     </button>
                   )}
 

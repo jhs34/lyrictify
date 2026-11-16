@@ -15,13 +15,18 @@ import {
   INTERLUDE_MIN_GAP_MS,
   PREVIEW_LRC,
   UI_PRESETS,
+  LYRIC_WAVE_ROW_DELAY_MS,
+  LYRIC_WAVE_SPATIAL_FREQ_RAD,
   buildSearchQueries,
+  buildWordEntranceSpec,
+  buildWordWaveSpec,
   clampSettingValue,
   cleanTitle,
   computeInterludeState,
   computeLyricVisualStyle,
   computeMarqueeMetrics,
   computeTrackProgressMs,
+  computeWordVisualPositions,
   deriveSecondaryAmbientColor,
   detectActivePreset,
   encodeBasicAuth,
@@ -40,6 +45,7 @@ import {
   selectBestLyricsFromCandidates,
   shouldResyncPlaybackClock,
   stepSyncOffset,
+  tokenizeLyricWords,
 } from './lyrics';
 import {
   base64UrlEncode,
@@ -600,6 +606,132 @@ test('interleavedGradientNoise stays strictly within [-0.5, 0.5] and computeLobe
     assert.equal(stepDist < 0.002, true);
   }
 });
+
+test('tokenizeLyricWords splits hyphenated compounds (na-na-na), smooths word entrance glide, and computes immediate spatial wave phase', () => {
+  // NFC normalization + space words + hyphen-delimited sub-words (e.g. na-na-na)
+  const decomposed = '한글'.normalize('NFD') + ' na-na-na yeah';
+  const words = tokenizeLyricWords(decomposed);
+  assert.deepEqual(
+    words.map((w) => ({ word: w.word, space: w.hasLeadingSpace })),
+    [
+      { word: '한글', space: false },
+      { word: 'na-', space: true },
+      { word: 'na-', space: false },
+      { word: 'na', space: false },
+      { word: 'yeah', space: true },
+    ]
+  );
+  // Reconstructing text from tokens + hasLeadingSpace is 100% lossless
+  const reconstructed = words.map((w) => (w.hasLeadingSpace ? ` ${w.word}` : w.word)).join('');
+  assert.equal(reconstructed, '한글 na-na-na yeah');
+
+  assert.equal(words[0].startCol, 0);
+  assert.equal(words[0].centerCol, 1);
+  // 'na-' starts after 2.0 + 0.85 space = 2.85, length 3 -> ends at 5.85 -> next 'na-' starts immediately at 5.85 (no 0.85 space gap)
+  assert.equal(words[1].startCol, 2.85);
+  assert.equal(words[2].startCol, 5.85);
+  assert.equal(words[3].startCol, 8.85);
+
+  // Smoother, slightly gentler single-stage word soft-scale + lift (860ms glide, ~1.035 scale, ~-2.35px lift)
+  const e0 = buildWordEntranceSpec(0, 24);
+  const e2 = buildWordEntranceSpec(2, 24);
+  assert.equal(e0.delayMs, 0);
+  assert.equal(e2.delayMs, 124);
+  assert.equal(e0.durationMs, 860);
+  assert.equal(e0.targetScale > 1.025 && e0.targetScale <= 1.042, true);
+  assert.equal(e0.targetLiftPx < -1.8 && e0.targetLiftPx >= -2.8, true);
+  assert.equal(e0.keyframes.length, 2);
+  assert.equal(e0.keyframes[0].transform, 'translate3d(0, 0px, 0) scale(1)');
+
+  // Gently narrowed horizontal wavelength (~32.7 columns per 2π cycle) & flattened font-size amplitude curve
+  const fullWavelengthCols = (Math.PI * 2) / LYRIC_WAVE_SPATIAL_FREQ_RAD;
+  assert.equal(fullWavelengthCols >= 31.5 && fullWavelengthCols <= 34.5, true);
+
+  const wWave20 = buildWordWaveSpec(words[0].centerCol, 20);
+  const wWave24 = buildWordWaveSpec(words[0].centerCol, 24);
+  const wWave38 = buildWordWaveSpec(words[0].centerCol, 38);
+  const wWave56 = buildWordWaveSpec(words[0].centerCol, 56);
+  const wWaveLast = buildWordWaveSpec(words[4].centerCol, 24);
+  assert.equal(wWave20.amplitudePx, 1.93);
+  assert.equal(wWave24.amplitudePx, 2.03);
+  assert.equal(wWave38.amplitudePx, 2.36);
+  assert.equal(wWave56.amplitudePx, 2.55);
+  assert.equal(wWaveLast.phaseOffsetMs > wWave24.phaseOffsetMs, true);
+  assert.equal(wWaveLast.phaseOffsetMs < wWave24.periodMs, true);
+  assert.equal(wWave24.keyframes.length, 5);
+
+  // Additional hyphen patterns: repeated compounds, standalone spaced hyphen, en-dash
+  for (const sample of ['DDU-DU DDU-DU', 'Oh-oh-oh!', 'Intro - Verse 1', 'la–la–la']) {
+    const sampleTokens = tokenizeLyricWords(sample);
+    const rebuilt = sampleTokens.map((w) => (w.hasLeadingSpace ? ` ${w.word}` : w.word)).join('');
+    assert.equal(rebuilt, sample);
+  }
+  assert.equal(tokenizeLyricWords('DDU-DU DDU-DU').length, 4);
+});
+
+test('computeWordVisualPositions detects wrapped lyric rows and buildWordWaveSpec applies exact 300ms diagonal row lag regardless of wrap point', () => {
+  // Case A: 7 words on row 0 (offsetTop=0) + 1 wrapped word on row 1 (offsetTop=29, offsetLeft=0)
+  const boxesA = [
+    { offsetLeft: 0, offsetTop: 0, offsetWidth: 80 },
+    { offsetLeft: 88, offsetTop: 1, offsetWidth: 44 },
+    { offsetLeft: 140, offsetTop: 0, offsetWidth: 96 },
+    { offsetLeft: 244, offsetTop: 0, offsetWidth: 44 },
+    { offsetLeft: 296, offsetTop: 0, offsetWidth: 62 },
+    { offsetLeft: 366, offsetTop: 0, offsetWidth: 44 },
+    { offsetLeft: 418, offsetTop: 0, offsetWidth: 24 },
+    { offsetLeft: 0, offsetTop: 29, offsetWidth: 80 },
+  ];
+  const posA = computeWordVisualPositions(boxesA, [2, 6, 10, 15, 19, 23, 26, 30], 24);
+  assert.equal(posA[0].rowIndex, 0);
+  assert.equal(posA[6].rowIndex, 0);
+  assert.equal(posA[7].rowIndex, 1);
+  // Row 1 first word resets horizontal visualCol back to match Row 0 first word (both at left edge x=0, width=80)
+  assert.equal(posA[7].visualCol, posA[0].visualCol);
+
+  const specRow0Left = buildWordWaveSpec(posA[0].visualCol, 24, posA[0].rowIndex);
+  const specRow1Left = buildWordWaveSpec(posA[7].visualCol, 24, posA[7].rowIndex);
+  assert.equal(specRow1Left.phaseOffsetMs - specRow0Left.phaseOffsetMs, LYRIC_WAVE_ROW_DELAY_MS);
+  assert.equal(LYRIC_WAVE_ROW_DELAY_MS, 300);
+
+  // Case B: Different word count wrapping onto 3 rows — vertically aligned left words still keep exact +300ms / +600ms lag
+  const boxesB = [
+    { offsetLeft: 0, offsetTop: 0, offsetWidth: 80 },
+    { offsetLeft: 90, offsetTop: 0, offsetWidth: 90 },
+    { offsetLeft: 0, offsetTop: 30, offsetWidth: 80 },
+    { offsetLeft: 90, offsetTop: 30, offsetWidth: 70 },
+    { offsetLeft: 0, offsetTop: 60, offsetWidth: 80 },
+  ];
+  const posB = computeWordVisualPositions(boxesB, [2, 7, 12, 17, 22], 24);
+  assert.deepEqual(
+    posB.map((p) => p.rowIndex),
+    [0, 0, 1, 1, 2]
+  );
+  const bRow0 = buildWordWaveSpec(posB[0].visualCol, 24, posB[0].rowIndex);
+  const bRow1 = buildWordWaveSpec(posB[2].visualCol, 24, posB[2].rowIndex);
+  const bRow2 = buildWordWaveSpec(posB[4].visualCol, 24, posB[4].rowIndex);
+  assert.equal(bRow1.phaseOffsetMs - bRow0.phaseOffsetMs, 300);
+  assert.equal(bRow2.phaseOffsetMs - bRow1.phaseOffsetMs, 300);
+
+  // Diagonal wavefront check: Row 1 left word (x=40px, lag=548ms) matches phase of Row 0 word slightly to the right (boxesA[1] at x=110px, lag=681ms)
+  const aRow0DiagRight = buildWordWaveSpec(posA[1].visualCol, 24, posA[1].rowIndex);
+  assert.equal(Math.abs(specRow1Left.phaseOffsetMs - aRow0DiagRight.phaseOffsetMs) < 150, true);
+
+  // Fallback when DOM boxes are unmeasured (all zeros)
+  const fallbackPos = computeWordVisualPositions(
+    [
+      { offsetLeft: 0, offsetTop: 0, offsetWidth: 0 },
+      { offsetLeft: 0, offsetTop: 0, offsetWidth: 0 },
+    ],
+    [1.5, 6.2],
+    24
+  );
+  assert.deepEqual(fallbackPos, [
+    { rowIndex: 0, visualCol: 1.5 },
+    { rowIndex: 0, visualCol: 6.2 },
+  ]);
+});
+
+
 
 
 

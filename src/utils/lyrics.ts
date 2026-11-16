@@ -1050,3 +1050,253 @@ export function computeMarqueeMetrics(
   };
 }
 
+export interface LyricCharToken {
+  char: string;
+  colIndex: number;
+}
+
+export interface LyricWordToken {
+  word: string;
+  wordIndex: number;
+  hasLeadingSpace: boolean;
+  startCol: number;
+  centerCol: number;
+  chars: LyricCharToken[];
+}
+
+export const LYRIC_WORD_STAGGER_STEP_MS = 62;
+export const LYRIC_WORD_STAGGER_MAX_DELAY_MS = 460;
+export const LYRIC_WORD_RISE_DURATION_MS = 860;
+export const LYRIC_LINE_DEACTIVATE_DURATION_MS = 440;
+export const LYRIC_WAVE_RAMP_IN_MS = 540;
+
+// Gently narrowed horizontal wavelength (~32.7 columns per 2π cycle), 300ms inter-row lag, & calm 3.5s cycle
+export const LYRIC_WAVE_SPATIAL_FREQ_RAD = 0.192;
+export const LYRIC_WAVE_PERIOD_MS = 3500;
+export const LYRIC_WAVE_ROW_DELAY_MS = 300;
+export const LYRIC_WAVE_ANGULAR_VEL_RAD_PER_SEC = (Math.PI * 2 * 1000) / LYRIC_WAVE_PERIOD_MS;
+
+const HYPHEN_SUBWORD_REGEX = /[-‑–]*[^-‑–]+[-‑–]*|[-‑–]+/g;
+
+let cachedGraphemeSegmenter: Intl.Segmenter | null | undefined;
+
+function splitGraphemes(word: string): string[] {
+  if (cachedGraphemeSegmenter === undefined) {
+    cachedGraphemeSegmenter =
+      typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null;
+  }
+  if (cachedGraphemeSegmenter) {
+    const out: string[] = [];
+    for (const seg of cachedGraphemeSegmenter.segment(word)) {
+      out.push(seg.segment);
+    }
+    return out;
+  }
+  return Array.from(word);
+}
+
+export function tokenizeLyricWords(rawText: string): LyricWordToken[] {
+  const normalized = (rawText ?? '').normalize('NFC').trim();
+  if (!normalized) return [];
+
+  const spaceChunks = normalized.split(/\s+/);
+  const tokens: LyricWordToken[] = [];
+  let cursorCol = 0;
+
+  for (let chunkIdx = 0; chunkIdx < spaceChunks.length; chunkIdx++) {
+    const chunk = spaceChunks[chunkIdx];
+    if (!chunk) continue;
+
+    const subWords = chunk.match(HYPHEN_SUBWORD_REGEX) ?? [chunk];
+
+    for (let subIdx = 0; subIdx < subWords.length; subIdx++) {
+      const subWord = subWords[subIdx];
+      if (!subWord) continue;
+
+      const hasLeadingSpace = tokens.length > 0 && subIdx === 0;
+      if (hasLeadingSpace) {
+        cursorCol += 0.85;
+      }
+
+      const startCol = Math.round(cursorCol * 100) / 100;
+      const graphemes = splitGraphemes(subWord);
+      const chars: LyricCharToken[] = [];
+      for (let cIdx = 0; cIdx < graphemes.length; cIdx++) {
+        chars.push({
+          char: graphemes[cIdx],
+          colIndex: Math.round(cursorCol * 100) / 100,
+        });
+        cursorCol += 1;
+      }
+      const endCol = cursorCol;
+      const centerCol = Math.round(((startCol + endCol) * 0.5) * 100) / 100;
+
+      tokens.push({
+        word: subWord,
+        wordIndex: tokens.length,
+        hasLeadingSpace,
+        startCol,
+        centerCol,
+        chars,
+      });
+    }
+  }
+
+  return tokens;
+}
+
+export interface WordEntranceSpec {
+  delayMs: number;
+  durationMs: number;
+  targetLiftPx: number;
+  targetScale: number;
+  easing: string;
+  keyframes: Array<{ offset: number; transform: string }>;
+}
+
+export function buildWordEntranceSpec(wordIndex: number, fontSizePx: number): WordEntranceSpec {
+  const safeFont = Number.isFinite(fontSizePx) ? fontSizePx : 24;
+  const delayMs = Math.min(
+    Math.max(0, wordIndex) * LYRIC_WORD_STAGGER_STEP_MS,
+    LYRIC_WORD_STAGGER_MAX_DELAY_MS
+  );
+  // Silky monotonic S-ease-out glide (gentler than 1.058/-3.36px, zero stop-and-reverse bounce hitch)
+  const targetLiftPx = -Math.round(Math.max(1.75, Math.min(3.2, safeFont * 0.098)) * 100) / 100;
+  const targetScale = 1.035;
+  const easing = 'cubic-bezier(0.24, 0.12, 0.16, 1)';
+
+  return {
+    delayMs,
+    durationMs: LYRIC_WORD_RISE_DURATION_MS,
+    targetLiftPx,
+    targetScale,
+    easing,
+    keyframes: [
+      {
+        offset: 0,
+        transform: 'translate3d(0, 0px, 0) scale(1)',
+      },
+      {
+        offset: 1,
+        transform: `translate3d(0, ${targetLiftPx}px, 0) scale(${targetScale})`,
+      },
+    ],
+  };
+}
+
+export interface WordLayoutBox {
+  offsetLeft: number;
+  offsetTop: number;
+  offsetWidth: number;
+}
+
+export interface WordVisualPosition {
+  rowIndex: number;
+  visualCol: number;
+}
+
+export function computeWordVisualPositions(
+  boxes: WordLayoutBox[],
+  fallbackCenterCols: number[],
+  fontSizePx: number
+): WordVisualPosition[] {
+  const count = Math.max(boxes.length, fallbackCenterCols.length);
+  if (count === 0) return [];
+
+  const hasMeasuredGeometry =
+    boxes.length === count &&
+    boxes.some((b) => b.offsetWidth > 0 || b.offsetLeft > 0 || b.offsetTop > 0);
+
+  if (!hasMeasuredGeometry) {
+    return Array.from({ length: count }, (_, idx) => ({
+      rowIndex: 0,
+      visualCol: Number.isFinite(fallbackCenterCols[idx])
+        ? Math.max(0, fallbackCenterCols[idx])
+        : 0,
+    }));
+  }
+
+  const safeFont = Number.isFinite(fontSizePx) && fontSizePx > 0 ? fontSizePx : 24;
+  const colUnitPx = Math.max(8, safeFont * 0.72);
+  const rowBreakThresholdPx = Math.max(8, safeFont * 0.55);
+  const lineLeftOrigin = boxes.reduce(
+    (minLeft, b) => (b.offsetLeft < minLeft ? b.offsetLeft : minLeft),
+    boxes[0].offsetLeft
+  );
+
+  const positions: WordVisualPosition[] = [];
+  let currentRow = 0;
+  let currentRowTop = boxes[0].offsetTop;
+
+  for (let i = 0; i < boxes.length; i++) {
+    const box = boxes[i];
+    if (i > 0) {
+      if (box.offsetTop - currentRowTop > rowBreakThresholdPx) {
+        currentRow += 1;
+        currentRowTop = box.offsetTop;
+      } else if (box.offsetTop < currentRowTop) {
+        currentRowTop = box.offsetTop;
+      }
+    }
+
+    const centerX = Math.max(0, box.offsetLeft + box.offsetWidth * 0.5 - lineLeftOrigin);
+    const visualCol = Math.round((centerX / colUnitPx) * 100) / 100;
+    positions.push({
+      rowIndex: currentRow,
+      visualCol,
+    });
+  }
+
+  return positions;
+}
+
+export interface WordWaveSpec {
+  rowIndex: number;
+  phaseOffsetMs: number;
+  periodMs: number;
+  amplitudePx: number;
+  keyframes: Array<{ offset: number; transform: string; easing?: string }>;
+}
+
+export function buildWordWaveSpec(
+  visualCol: number,
+  fontSizePx: number,
+  rowIndex = 0
+): WordWaveSpec {
+  const safeFont = Number.isFinite(fontSizePx) ? fontSizePx : 24;
+  const safeCol = Number.isFinite(visualCol) ? Math.max(0, visualCol) : 0;
+  const safeRow = Number.isFinite(rowIndex) ? Math.max(0, Math.floor(rowIndex)) : 0;
+  // Flattened perceptual amplitude curve: lively on mobile default (~2.03px at 24px) while restrained on tablet large text (~2.36px at 38px, max 2.55px)
+  const amplitudePx =
+    Math.round(Math.max(1.85, Math.min(2.55, 1.45 + safeFont * 0.024)) * 100) / 100;
+  const horizPhaseFraction = (safeCol * LYRIC_WAVE_SPATIAL_FREQ_RAD) / (Math.PI * 2);
+  const totalLagMs =
+    horizPhaseFraction * LYRIC_WAVE_PERIOD_MS + safeRow * LYRIC_WAVE_ROW_DELAY_MS;
+  // 2D spatial phase lag (horizontal visual x + 300ms per wrapped row); paired with negative delay -(periodMs - phaseOffsetMs)
+  const phaseOffsetMs =
+    ((Math.round(totalLagMs) % LYRIC_WAVE_PERIOD_MS) + LYRIC_WAVE_PERIOD_MS) %
+    LYRIC_WAVE_PERIOD_MS;
+
+  // Quarter-sine matched cubic-bezier segments yield a C1-smooth sinusoidal GPU compositor loop
+  const qRise = 'cubic-bezier(0.364, 0.572, 0.636, 1)';
+  const qFall = 'cubic-bezier(0.364, 0, 0.636, 0.428)';
+
+  return {
+    rowIndex: safeRow,
+    phaseOffsetMs,
+    periodMs: LYRIC_WAVE_PERIOD_MS,
+    amplitudePx,
+    keyframes: [
+      { offset: 0, transform: 'translate3d(0, 0px, 0)', easing: qRise },
+      { offset: 0.25, transform: `translate3d(0, ${-amplitudePx}px, 0)`, easing: qFall },
+      { offset: 0.5, transform: 'translate3d(0, 0px, 0)', easing: qRise },
+      { offset: 0.75, transform: `translate3d(0, ${amplitudePx}px, 0)`, easing: qFall },
+      { offset: 1, transform: 'translate3d(0, 0px, 0)' },
+    ],
+  };
+}
+
+
+
