@@ -7,6 +7,7 @@ import { LyricsViewport } from './components/LyricsViewport';
 import { MediaControls } from './components/MediaControls';
 import { SettingsModal } from './components/SettingsModal';
 import { useIdleAutoHide } from './hooks/useIdleAutoHide';
+import { useSplitLayoutMorph } from './hooks/useSplitLayoutMorph';
 import { useWakeLock } from './hooks/useWakeLock';
 import { searchLyricsOnLrcLib } from './services/lrclib';
 import {
@@ -34,11 +35,13 @@ import {
 } from './types/lyrics';
 import {
   DEFAULT_UI_SETTINGS,
+  MOBILE_LANDSCAPE_MEDIA_QUERY,
   PREVIEW_CANDIDATES,
   PREVIEW_DURATION_MS,
   PREVIEW_LRC,
   UI_PRESETS,
   computeTrackProgressMs,
+  isMobileLandscapeViewport,
   parseLRC,
   parsePlainLyrics,
   resetSingleSetting,
@@ -79,7 +82,8 @@ export default function App() {
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('autostart') === '1') return false;
+    const autostart = params.get('autostart');
+    if (autostart === '1' || autostart === 'vinyl') return false;
     const stored = loadStoredCredentials();
     return !stored.refreshToken.trim();
   });
@@ -113,6 +117,11 @@ export default function App() {
   const [isLargeViewport, setIsLargeViewport] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true
   );
+  const [isMobileLandscape, setIsMobileLandscape] = useState<boolean>(() =>
+    typeof window !== 'undefined'
+      ? isMobileLandscapeViewport(window.innerWidth, window.innerHeight)
+      : false
+  );
 
   const accessTokenRef = useRef<string>('');
   const currentSongIdRef = useRef<string>('');
@@ -137,7 +146,10 @@ export default function App() {
 
   useWakeLock(settings.keepAwake);
   const isIdleHidden = useIdleAutoHide(
-    settings.autoHideHud && !isModalOpen && !isPickerOpen && status === 'lyrics_ready'
+    settings.autoHideHud &&
+      !isModalOpen &&
+      !isPickerOpen &&
+      (status === 'lyrics_ready' || status === 'lyrics_not_found')
   );
 
   // Sync CSS variables synchronously before layout measurements in child effects
@@ -161,7 +173,7 @@ export default function App() {
     }, 1400);
   }, []);
 
-  // Track Fullscreen API state and desktop lg (1024px) split-view breakpoint
+  // Track Fullscreen API state, desktop lg (1024px) split-view breakpoint, and compact mobile landscape
   useEffect(() => {
     const syncFsState = () => {
       const doc = document as Document & { webkitFullscreenElement?: Element | null };
@@ -171,14 +183,25 @@ export default function App() {
     document.addEventListener('webkitfullscreenchange', syncFsState);
 
     const mql = window.matchMedia('(min-width: 1024px)');
-    const handleMqlChange = (e: MediaQueryListEvent) => setIsLargeViewport(e.matches);
-    setIsLargeViewport(mql.matches);
-    mql.addEventListener('change', handleMqlChange);
+    const mobileLandMql = window.matchMedia(MOBILE_LANDSCAPE_MEDIA_QUERY);
+    const syncViewportFlags = () => {
+      setIsLargeViewport(mql.matches);
+      setIsMobileLandscape(isMobileLandscapeViewport(window.innerWidth, window.innerHeight));
+    };
+    syncViewportFlags();
+
+    mql.addEventListener('change', syncViewportFlags);
+    mobileLandMql.addEventListener('change', syncViewportFlags);
+    window.addEventListener('resize', syncViewportFlags);
+    window.addEventListener('orientationchange', syncViewportFlags);
 
     return () => {
       document.removeEventListener('fullscreenchange', syncFsState);
       document.removeEventListener('webkitfullscreenchange', syncFsState);
-      mql.removeEventListener('change', handleMqlChange);
+      mql.removeEventListener('change', syncViewportFlags);
+      mobileLandMql.removeEventListener('change', syncViewportFlags);
+      window.removeEventListener('resize', syncViewportFlags);
+      window.removeEventListener('orientationchange', syncViewportFlags);
     };
   }, []);
 
@@ -570,7 +593,8 @@ export default function App() {
     };
   }, []);
 
-  const startPreviewMode = useCallback(() => {
+  const startPreviewMode = useCallback((options?: { withoutLyrics?: boolean }) => {
+    const withoutLyrics = Boolean(options?.withoutLyrics);
     lyricsAbortRef.current?.abort();
     isPreviewRef.current = true;
     accessTokenRef.current = '';
@@ -583,15 +607,33 @@ export default function App() {
     setIsPreviewMode(true);
     setTrack(PREVIEW_TRACK);
     setIsPlainLyrics(false);
-    setLyricSource('LRCLIB · 미리보기');
-    setLyrics(parseLRC(PREVIEW_LRC));
     setLyricCandidates(PREVIEW_CANDIDATES);
-    setSelectedCandidateId(PREVIEW_CANDIDATES[0].id);
-    setStatus('lyrics_ready');
+
+    if (withoutLyrics) {
+      setLyricSource('');
+      setLyrics([]);
+      setSelectedCandidateId(null);
+      setStatus('lyrics_not_found');
+    } else {
+      setLyricSource('LRCLIB · 미리보기');
+      setLyrics(parseLRC(PREVIEW_LRC));
+      setSelectedCandidateId(PREVIEW_CANDIDATES[0].id);
+      setStatus('lyrics_ready');
+    }
+
     setIsPlaying(true);
     setShowControls(true);
     setProgressAnchorMs(0);
     setAnchorTimestamp(performance.now());
+  }, []);
+
+  const handleSelectNoLyrics = useCallback(() => {
+    setIsPlainLyrics(false);
+    setLyricSource('');
+    setLyrics([]);
+    setSelectedCandidateId(null);
+    setStatus('lyrics_not_found');
+    setIsPickerOpen(false);
   }, []);
 
   const handleSelectCandidate = useCallback(
@@ -661,8 +703,9 @@ export default function App() {
       return;
     }
 
-    if (params.get('autostart') === '1') {
-      startPreviewMode();
+    const autostart = params.get('autostart');
+    if (autostart === '1' || autostart === 'vinyl') {
+      startPreviewMode({ withoutLyrics: autostart === 'vinyl' });
       return;
     }
 
@@ -819,25 +862,51 @@ export default function App() {
     });
   }, []);
 
-  const handleUpdateBooleanSetting = useCallback((key: BooleanSettingKey, value: boolean) => {
-    saveBooleanSetting(key, value);
-    setSettings((prev) => ({ ...prev, [key]: value }));
-  }, []);
+  const isVinylMode = status === 'lyrics_not_found' && Boolean(track);
+  const isDesktopSplitActive = Boolean(settings.splitLayout && track && isLargeViewport);
+  const canMorphSplitLayout = Boolean(track && !isVinylMode && isLargeViewport);
 
-  const handleResetSingleSetting = useCallback((key: keyof UISettings) => {
-    setSettings((prev) => {
-      const next = resetSingleSetting(prev, key);
-      const nextVal = next[key];
-      if (typeof nextVal === 'boolean') {
-        saveBooleanSetting(key as BooleanSettingKey, nextVal);
-      } else {
-        saveNumericSetting(key as NumericSettingKey, nextVal);
+  const {
+    viewportRootRef,
+    activeMorphDirection,
+    isMorphingSplitTransition,
+    captureBeforeSplitToggle,
+  } = useSplitLayoutMorph(isDesktopSplitActive, canMorphSplitLayout);
+
+  const handleUpdateBooleanSetting = useCallback(
+    (key: BooleanSettingKey, value: boolean) => {
+      if (key === 'splitLayout') {
+        captureBeforeSplitToggle();
       }
-      return next;
-    });
-  }, []);
+      saveBooleanSetting(key, value);
+      setSettings((prev) => ({ ...prev, [key]: value }));
+    },
+    [captureBeforeSplitToggle]
+  );
+
+  const handleResetSingleSetting = useCallback(
+    (key: keyof UISettings) => {
+      if (key === 'splitLayout') {
+        captureBeforeSplitToggle();
+      }
+      setSettings((prev) => {
+        const next = resetSingleSetting(prev, key);
+        const nextVal = next[key];
+        if (typeof nextVal === 'boolean') {
+          saveBooleanSetting(key as BooleanSettingKey, nextVal);
+        } else {
+          saveNumericSetting(key as NumericSettingKey, nextVal);
+        }
+        return next;
+      });
+    },
+    [captureBeforeSplitToggle]
+  );
 
   const handleResetDefaults = () => {
+    if (settings.splitLayout !== DEFAULT_UI_SETTINGS.splitLayout) {
+      captureBeforeSplitToggle();
+    }
     saveAllUISettings(DEFAULT_UI_SETTINGS);
     setSettings({ ...DEFAULT_UI_SETTINGS });
   };
@@ -955,10 +1024,13 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const isDesktopSplitActive = Boolean(settings.splitLayout && track && isLargeViewport);
+  const isStackedVinylPlayer = Boolean(isVinylMode && !isMobileLandscape);
+  const useMinimalHeaderBar = isDesktopSplitActive || isStackedVinylPlayer;
 
   return (
     <div
+      ref={viewportRootRef}
+      data-layout-morph={activeMorphDirection ?? undefined}
       className={`app-viewport-root relative isolate flex flex-col w-full overflow-clip bg-[var(--bg-page)] ${
         isIdleHidden ? 'cursor-none' : ''
       }`}
@@ -971,7 +1043,9 @@ export default function App() {
 
       <Header
         track={track}
-        isDesktopSplitActive={isDesktopSplitActive}
+        isDesktopSplitActive={useMinimalHeaderBar}
+        activeMorphDirection={activeMorphDirection}
+        hideSplitToggle={isVinylMode}
         isFullscreen={isFullscreen}
         isIdleHidden={isIdleHidden}
         splitLayout={settings.splitLayout}
@@ -1002,6 +1076,8 @@ export default function App() {
         isPlainLyrics={isPlainLyrics}
         lyricSource={lyricSource}
         isDesktopSplitActive={isDesktopSplitActive}
+        isMorphingSplitTransition={isMorphingSplitTransition}
+        isStackedVinylPlayer={isStackedVinylPlayer}
         showControls={showControls}
         isPlaying={isPlaying}
         isPreviewMode={isPreviewMode}
@@ -1016,10 +1092,10 @@ export default function App() {
         onNext={handleNext}
         onOpenLyricPicker={() => setIsPickerOpen(true)}
         onOpenSettings={() => openSettingsModal('spotify')}
-        onStartPreview={startPreviewMode}
+        onStartPreview={() => startPreviewMode()}
       />
 
-      {!isDesktopSplitActive && track && (
+      {!useMinimalHeaderBar && track && (
         <MediaControls
           variant="landscape-dock"
           visible={showControls}
@@ -1042,7 +1118,9 @@ export default function App() {
         track={track}
         initialCandidates={lyricCandidates}
         selectedCandidateId={selectedCandidateId}
+        isVinylViewActive={status === 'lyrics_not_found'}
         onSelectCandidate={handleSelectCandidate}
+        onSelectNoLyrics={handleSelectNoLyrics}
         onClose={() => setIsPickerOpen(false)}
       />
 
@@ -1061,7 +1139,7 @@ export default function App() {
         onStartPkceConnect={(cid) => void handleStartPkceConnect(cid)}
         onSaveAndConnect={handleSaveAndConnect}
         onDisconnectSpotify={handleDisconnectSpotify}
-        onStartPreview={startPreviewMode}
+        onStartPreview={() => startPreviewMode()}
         onApplyPreset={handleApplyPreset}
         onStepSyncOffset={handleStepSyncOffset}
         onUpdateNumericSetting={handleUpdateNumericSetting}

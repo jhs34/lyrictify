@@ -1067,8 +1067,8 @@ export interface LyricWordToken {
 export const LYRIC_WORD_STAGGER_STEP_MS = 62;
 export const LYRIC_WORD_STAGGER_MAX_DELAY_MS = 460;
 export const LYRIC_WORD_RISE_DURATION_MS = 860;
-export const LYRIC_LINE_DEACTIVATE_DURATION_MS = 440;
-export const LYRIC_WAVE_RAMP_IN_MS = 540;
+export const LYRIC_LINE_DEACTIVATE_DURATION_MS = 420;
+export const LYRIC_WAVE_RAMP_IN_MS = 520;
 
 // Gently narrowed horizontal wavelength (~32.7 columns per 2π cycle), 300ms inter-row lag, & calm 3.5s cycle
 export const LYRIC_WAVE_SPATIAL_FREQ_RAD = 0.192;
@@ -1165,7 +1165,7 @@ export function buildWordEntranceSpec(wordIndex: number, fontSizePx: number): Wo
   // Silky monotonic S-ease-out glide (gentler than 1.058/-3.36px, zero stop-and-reverse bounce hitch)
   const targetLiftPx = -Math.round(Math.max(1.75, Math.min(3.2, safeFont * 0.098)) * 100) / 100;
   const targetScale = 1.035;
-  const easing = 'cubic-bezier(0.24, 0.12, 0.16, 1)';
+  const easing = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
   return {
     delayMs,
@@ -1298,5 +1298,201 @@ export function buildWordWaveSpec(
   };
 }
 
+export const TURNTABLE_REV_DURATION_MS = 14000;
+export const TURNTABLE_SPINUP_TAU_MS = 540;
+export const TURNTABLE_SPINDOWN_TAU_MS = 900;
+
+export function stepTurntableSpinRate(
+  currentRate: number,
+  isPlaying: boolean,
+  deltaMs: number
+): number {
+  const safeCurrent = Number.isFinite(currentRate)
+    ? Math.max(0, Math.min(1, currentRate))
+    : isPlaying
+      ? 1
+      : 0;
+  const target = isPlaying ? 1 : 0;
+  if (safeCurrent === target) return target;
+
+  const safeDelta = Number.isFinite(deltaMs) ? Math.max(0, Math.min(250, deltaMs)) : 16.67;
+  if (safeDelta === 0) return safeCurrent;
+
+  const tau = isPlaying ? TURNTABLE_SPINUP_TAU_MS : TURNTABLE_SPINDOWN_TAU_MS;
+  const alpha = 1 - Math.exp(-safeDelta / tau);
+  const next = safeCurrent + (target - safeCurrent) * alpha;
+
+  if (Math.abs(target - next) < 0.003) {
+    return target;
+  }
+  return Math.round(next * 10000) / 10000;
+}
+
+export function stepExponentialSmoothing(
+  current: number,
+  target: number,
+  deltaMs: number,
+  tauMs: number,
+  snapEpsilon = 0.05
+): number {
+  if (!Number.isFinite(target)) return 0;
+  if (!Number.isFinite(current)) return target;
+  if (current === target) return target;
+
+  const safeTau = Number.isFinite(tauMs) && tauMs > 0 ? tauMs : 100;
+  const safeDelta = Number.isFinite(deltaMs) ? Math.max(0, Math.min(250, deltaMs)) : 16.67;
+  if (safeDelta === 0) return current;
+
+  const alpha = 1 - Math.exp(-safeDelta / safeTau);
+  const next = current + (target - current) * alpha;
+  if (Math.abs(target - next) <= Math.max(0, snapEpsilon)) {
+    return target;
+  }
+  return next;
+}
+
+export const MOBILE_LANDSCAPE_MEDIA_QUERY =
+  '(orientation: landscape) and (max-height: 540px) and (max-width: 1023px)';
+
+export function isMobileLandscapeViewport(width: number, height: number): boolean {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return false;
+  }
+  return width > height && height <= 540 && width <= 1023;
+}
+
+export type PresencePhase = 'unmounted' | 'entering' | 'entered' | 'exiting';
+
+export const MODAL_EXIT_DURATION_MS = 280;
+export const ACCORDION_EXIT_DURATION_MS = 340;
+export const SPLIT_ASIDE_EXIT_DURATION_MS = 360;
+
+export function resolvePresencePhaseOnToggle(
+  currentPhase: PresencePhase,
+  isOpen: boolean,
+  reducedMotion = false
+): PresencePhase {
+  if (isOpen) {
+    if (reducedMotion) return 'entered';
+    if (currentPhase === 'entered') return 'entered';
+    // If re-opened mid-exit, transition directly back to entered without resetting to unmounted
+    if (currentPhase === 'exiting') return 'entered';
+    return 'entering';
+  }
+
+  if (currentPhase === 'unmounted') return 'unmounted';
+  if (reducedMotion) return 'unmounted';
+  return 'exiting';
+}
+
+export interface MorphBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export type MorphScaleMode = 'contain-uniform' | 'height-left' | 'stretch-x-left';
+
+export interface SharedMorphTransformSpec {
+  fromTransform: string;
+  toTransform: string;
+  fromScaleX: number;
+  toScaleX: number;
+}
+
+export const LAYOUT_MORPH_DURATION_MS = 720;
+export const LAYOUT_MORPH_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+export const CHROME_REVEAL_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+export const CHROME_EXIT_EASING = 'cubic-bezier(0.32, 0, 0.2, 1)';
+
+function isValidMorphBox(box: MorphBox | null | undefined): box is MorphBox {
+  if (!box) return false;
+  return (
+    Number.isFinite(box.left) &&
+    Number.isFinite(box.top) &&
+    Number.isFinite(box.width) &&
+    Number.isFinite(box.height) &&
+    box.width > 0.5 &&
+    box.height > 0.5
+  );
+}
+
+export function computeSharedMorphTransform(
+  rest: MorphBox,
+  start: MorphBox,
+  end: MorphBox,
+  mode: MorphScaleMode
+): SharedMorphTransformSpec | null {
+  if (!isValidMorphBox(rest) || !isValidMorphBox(start) || !isValidMorphBox(end)) {
+    return null;
+  }
+
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
+  const restCy = rest.top + rest.height * 0.5;
+  const startCy = start.top + start.height * 0.5;
+  const endCy = end.top + end.height * 0.5;
+
+  if (mode === 'contain-uniform') {
+    const restCx = rest.left + rest.width * 0.5;
+    const startCx = start.left + start.width * 0.5;
+    const endCx = end.left + end.width * 0.5;
+
+    const dx0 = round2(startCx - restCx);
+    const dy0 = round2(startCy - restCy);
+    const s0 = round4(start.height / rest.height);
+
+    const dx1 = round2(endCx - restCx);
+    const dy1 = round2(endCy - restCy);
+    const s1 = round4(end.height / rest.height);
+
+    return {
+      fromTransform: `translate3d(${dx0}px, ${dy0}px, 0) scale(${s0})`,
+      toTransform: `translate3d(${dx1}px, ${dy1}px, 0) scale(${s1})`,
+      fromScaleX: s0,
+      toScaleX: s1,
+    };
+  }
+
+  if (mode === 'height-left') {
+    const dx0 = round2(start.left - rest.left);
+    const dy0 = round2(startCy - restCy);
+    const s0 = round4(start.height / rest.height);
+
+    const dx1 = round2(end.left - rest.left);
+    const dy1 = round2(endCy - restCy);
+    const s1 = round4(end.height / rest.height);
+
+    return {
+      fromTransform: `translate3d(${dx0}px, ${dy0}px, 0) scale(${s0})`,
+      toTransform: `translate3d(${dx1}px, ${dy1}px, 0) scale(${s1})`,
+      fromScaleX: s0,
+      toScaleX: s1,
+    };
+  }
+
+  // mode === 'stretch-x-left'
+  const dx0 = round2(start.left - rest.left);
+  const dy0 = round2(startCy - restCy);
+  const sx0 = round4(start.width / rest.width);
+
+  const dx1 = round2(end.left - rest.left);
+  const dy1 = round2(endCy - restCy);
+  const sx1 = round4(end.width / rest.width);
+
+  return {
+    fromTransform: `translate3d(${dx0}px, ${dy0}px, 0) scale(${sx0}, 1)`,
+    toTransform: `translate3d(${dx1}px, ${dy1}px, 0) scale(${sx1}, 1)`,
+    fromScaleX: sx0,
+    toScaleX: sx1,
+  };
+}
+
+export function computeHorizontalStageFlipDx(fromLeft: number, toLeft: number): number {
+  if (!Number.isFinite(fromLeft) || !Number.isFinite(toLeft)) return 0;
+  return Math.round((fromLeft - toLeft) * 100) / 100;
+}
 
 

@@ -16,8 +16,8 @@ interface AmbientBackdropProps {
 
 const SAMPLE_GRID_SIZE = 24;
 const FULL_DRIFT_PERIOD_SEC = 28; // Calm, meditative organic drift (zero spinning noise)
-const RATE_RAMP_DURATION_SEC = 0.9;
-const PALETTE_LERP_SPEED = 2.6;
+const RATE_RAMP_DURATION_SEC = 1.25;
+const PALETTE_LERP_SPEED = 1.85;
 
 const VERTEX_SHADER_SRC = `
 attribute vec2 a_pos;

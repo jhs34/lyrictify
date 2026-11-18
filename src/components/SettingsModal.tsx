@@ -3,7 +3,6 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
-  ChevronUp,
   Copy,
   Eye,
   EyeOff,
@@ -11,6 +10,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { usePresenceTransition } from '../hooks/usePresenceTransition';
 import {
   BooleanSettingKey,
   NumericSettingKey,
@@ -21,7 +21,9 @@ import {
   ViewerStatus,
 } from '../types/lyrics';
 import {
+  ACCORDION_EXIT_DURATION_MS,
   DEFAULT_UI_SETTINGS,
+  MODAL_EXIT_DURATION_MS,
   SETTING_CONSTRAINTS,
   UI_PRESETS,
   clampSettingValue,
@@ -306,7 +308,7 @@ function BooleanSettingRow({
           onChange={(e) => onToggle(settingKey, e.target.checked)}
           className="sr-only peer"
         />
-        <div className="w-9 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-150 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-150 peer-checked:after:translate-x-4" />
+        <div className="w-9 h-5 bg-[var(--bg-raised)] border border-[var(--border-hairline)] rounded-[6px] peer peer-checked:bg-[var(--accent)] peer-checked:border-transparent peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--text-primary)] transition-colors duration-250 ease-[cubic-bezier(0.32,0.72,0,1)] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-[var(--text-primary)] peer-checked:after:bg-[var(--bg-deepest)] after:rounded-[4px] after:h-4 after:w-4 after:transition-transform after:duration-250 after:ease-[cubic-bezier(0.32,0.72,0,1)] peer-checked:after:translate-x-4" />
       </label>
     </div>
   );
@@ -353,6 +355,14 @@ export function SettingsModal({
   const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const [copiedUri, setCopiedUri] = useState(false);
   const isPressingSliderRef = useRef(false);
+
+  const modalPresence = usePresenceTransition(isOpen, MODAL_EXIT_DURATION_MS);
+  const advancedPresence = usePresenceTransition(showAdvanced, ACCORDION_EXIT_DURATION_MS);
+  const guidePresence = usePresenceTransition(showGuide, ACCORDION_EXIT_DURATION_MS);
+  const manualTokensPresence = usePresenceTransition(
+    showManualTokens,
+    ACCORDION_EXIT_DURATION_MS
+  );
 
   const redirectUri = getSpotifyRedirectUri();
 
@@ -420,7 +430,7 @@ export function SettingsModal({
     };
   }, [isOpen, isTransparentDrag, draggingSliderKey, onSliderDragEnd]);
 
-  if (!isOpen) return null;
+  if (!modalPresence.shouldRender) return null;
 
   const isSpotifyConnected =
     !isPreviewMode &&
@@ -502,20 +512,22 @@ export function SettingsModal({
 
   return (
     <div
+      data-presence={modalPresence.phase}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isTransparentDrag) {
           onClose();
         }
       }}
-      className={`fixed inset-0 z-50 isolate flex justify-center items-center p-4 transition-colors duration-200 ${
-        isTransparentDrag ? 'bg-transparent' : 'bg-black/65'
+      className={`modal-backdrop-presence fixed inset-0 z-50 isolate flex justify-center items-center p-4 ${
+        isTransparentDrag ? 'backdrop-transparent-drag' : ''
       }`}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
-        className={`surface-modal relative w-full max-w-[476px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
+        data-presence={modalPresence.phase}
+        className={`surface-modal modal-dialog-presence relative w-full max-w-[476px] rounded-2xl max-h-[88vh] flex flex-col overflow-hidden ${
           isTransparentDrag ? 'transparent-mode' : ''
         }`}
       >
@@ -532,8 +544,9 @@ export function SettingsModal({
           <div
             role="tablist"
             aria-label="설정 카테고리"
-            className="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)]"
+            className="relative grid grid-cols-2 p-1 rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)]"
           >
+            <span aria-hidden="true" data-tab={activeTab} className="segmented-tab-pill" />
             <button
               type="button"
               role="tab"
@@ -541,9 +554,9 @@ export function SettingsModal({
               aria-selected={activeTab === 'display'}
               aria-controls="panel-display"
               onClick={() => setActiveTab('display')}
-              className={`h-7 px-3 rounded-[6px] text-xs font-medium transition-colors duration-150 cursor-pointer whitespace-nowrap ${
+              className={`relative z-10 h-7 px-3 rounded-[6px] text-xs font-medium flex items-center justify-center transition-colors duration-150 cursor-pointer whitespace-nowrap ${
                 activeTab === 'display'
-                  ? 'bg-[var(--bg-raised)] text-[var(--text-primary)]'
+                  ? 'text-[var(--text-primary)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
             >
@@ -556,9 +569,9 @@ export function SettingsModal({
               aria-selected={activeTab === 'spotify'}
               aria-controls="panel-spotify"
               onClick={() => setActiveTab('spotify')}
-              className={`h-7 px-3 rounded-[6px] text-xs font-medium flex items-center gap-2 transition-colors duration-150 cursor-pointer whitespace-nowrap ${
+              className={`relative z-10 h-7 px-3 rounded-[6px] text-xs font-medium flex items-center justify-center gap-2 transition-colors duration-150 cursor-pointer whitespace-nowrap ${
                 activeTab === 'spotify'
-                  ? 'bg-[var(--bg-raised)] text-[var(--text-primary)]'
+                  ? 'text-[var(--text-primary)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
               }`}
             >
@@ -584,7 +597,7 @@ export function SettingsModal({
             id="panel-display"
             role="tabpanel"
             aria-labelledby="tab-display"
-            className="flex flex-col flex-1 min-h-0"
+            className="tab-panel-enter flex flex-col flex-1 min-h-0"
           >
             <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto modal-scroll-body">
               {/* 1. One-Tap View Presets */}
@@ -606,7 +619,7 @@ export function SettingsModal({
                         type="button"
                         aria-pressed={isSelected}
                         onClick={() => onApplyPreset(preset.id)}
-                        className={`rounded-lg p-2.5 text-left border transition-colors duration-150 active:scale-[0.98] cursor-pointer ${
+                        className={`rounded-lg p-2.5 text-left border transition-[background-color,border-color,color,transform] duration-250 ease-[cubic-bezier(0.32,0.72,0,1)] active:scale-[0.98] cursor-pointer ${
                           isSelected
                             ? 'bg-[var(--bg-raised)] border-[var(--accent)]/60 text-[var(--text-primary)]'
                             : 'bg-[var(--bg-deepest)] border-[var(--border-hairline)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)]'
@@ -734,34 +747,42 @@ export function SettingsModal({
                   type="button"
                   aria-expanded={showAdvanced}
                   onClick={() => setShowAdvanced((prev) => !prev)}
-                  className="w-full h-9 flex items-center justify-between text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hide-on-drag cursor-pointer"
+                  className="w-full h-9 flex items-center justify-between text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hide-on-drag transition-colors duration-150 cursor-pointer"
                 >
                   <span>세부 모션 · 간격 설정</span>
-                  {showAdvanced ? (
-                    <ChevronUp size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  ) : (
-                    <ChevronDown size={16} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  )}
+                  <ChevronDown
+                    size={16}
+                    strokeWidth={1.5}
+                    data-open={showAdvanced ? 'true' : 'false'}
+                    className="chevron-rotate text-[var(--text-muted)]"
+                  />
                 </button>
 
-                {showAdvanced && (
-                  <div className="space-y-2 pt-2">
-                    {ADVANCED_SLIDERS.map((key) => (
-                      <SliderSettingRow
-                        key={key}
-                        settingKey={key}
-                        value={settings[key]}
-                        isActiveDrag={isTransparentDrag && draggingSliderKey === key}
-                        isDimmedByOtherDrag={
-                          isTransparentDrag &&
-                          draggingSliderKey !== null &&
-                          draggingSliderKey !== key
-                        }
-                        onUpdate={onUpdateNumericSetting}
-                        onResetSingle={onResetSingleSetting}
-                        onDragStart={handleRowDragStart}
-                      />
-                    ))}
+                {advancedPresence.shouldRender && (
+                  <div
+                    data-presence={advancedPresence.phase}
+                    className="accordion-presence-grid"
+                  >
+                    <div className="accordion-presence-inner">
+                      <div className="space-y-2 pt-2">
+                        {ADVANCED_SLIDERS.map((key) => (
+                          <SliderSettingRow
+                            key={key}
+                            settingKey={key}
+                            value={settings[key]}
+                            isActiveDrag={isTransparentDrag && draggingSliderKey === key}
+                            isDimmedByOtherDrag={
+                              isTransparentDrag &&
+                              draggingSliderKey !== null &&
+                              draggingSliderKey !== key
+                            }
+                            onUpdate={onUpdateNumericSetting}
+                            onResetSingle={onResetSingleSetting}
+                            onDragStart={handleRowDragStart}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
               </section>
@@ -799,7 +820,7 @@ export function SettingsModal({
             role="tabpanel"
             aria-labelledby="tab-spotify"
             onSubmit={handleManualSpotifySubmit}
-            className="flex flex-col flex-1 min-h-0"
+            className="tab-panel-enter flex flex-col flex-1 min-h-0"
           >
             <div className="px-5 py-4 space-y-4 flex-1 overflow-y-auto modal-scroll-body">
               <div className="flex items-center justify-between gap-2">
@@ -815,29 +836,36 @@ export function SettingsModal({
                   className="h-8 px-3 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-hairline)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1.5 active:scale-[0.97] transition-[color,transform] duration-150 cursor-pointer whitespace-nowrap"
                 >
                   <span>연결 안내</span>
-                  {showGuide ? (
-                    <ChevronUp size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  ) : (
-                    <ChevronDown size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  )}
+                  <ChevronDown
+                    size={15}
+                    strokeWidth={1.5}
+                    data-open={showGuide ? 'true' : 'false'}
+                    className="chevron-rotate text-[var(--text-muted)]"
+                  />
                 </button>
               </div>
 
-              {showGuide && (
-                <div className="rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)] p-3 text-xs text-[var(--text-secondary)] space-y-1.5 leading-5">
-                  <p className="font-medium text-[var(--text-primary)]">
-                    Spotify PKCE 원클릭 연결 순서
-                  </p>
-                  <p>1. Spotify Developer Dashboard에서 앱 생성 후 Client ID 복사</p>
-                  <p>2. 앱 설정의 Redirect URIs에 아래 주소를 추가하고 저장</p>
-                  <p>3. Client ID 입력 후 ‘Spotify로 원클릭 연결’을 누르면 토큰이 자동 발급됩니다</p>
+              {guidePresence.shouldRender && (
+                <div data-presence={guidePresence.phase} className="accordion-presence-grid">
+                  <div className="accordion-presence-inner">
+                    <div className="rounded-lg bg-[var(--bg-deepest)] border border-[var(--border-hairline)] p-3 text-xs text-[var(--text-secondary)] space-y-1.5 leading-5">
+                      <p className="font-medium text-[var(--text-primary)]">
+                        Spotify PKCE 원클릭 연결 순서
+                      </p>
+                      <p>1. Spotify Developer Dashboard에서 앱 생성 후 Client ID 복사</p>
+                      <p>2. 앱 설정의 Redirect URIs에 아래 주소를 추가하고 저장</p>
+                      <p>
+                        3. Client ID 입력 후 ‘Spotify로 원클릭 연결’을 누르면 토큰이 자동 발급됩니다
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {(validationError || viewerStatus === 'auth_error') && (
                 <div
                   role="alert"
-                  className="flex items-center gap-2 rounded-lg bg-[#e5484d]/10 border border-[#e5484d]/30 p-3 text-xs text-[#f5b6b8]"
+                  className="notice-banner-enter flex items-center gap-2 rounded-lg bg-[#e5484d]/10 border border-[#e5484d]/30 p-3 text-xs text-[#f5b6b8]"
                 >
                   <AlertCircle size={16} strokeWidth={1.5} className="text-[#e5484d] shrink-0" />
                   <span>
@@ -850,7 +878,7 @@ export function SettingsModal({
               {pasteNotice && !validationError && (
                 <div
                   role="status"
-                  className="rounded-lg bg-[var(--bg-deepest)] border border-[var(--accent)]/40 px-3 py-2 text-xs text-[var(--accent)]"
+                  className="notice-banner-enter rounded-lg bg-[var(--bg-deepest)] border border-[var(--accent)]/40 px-3 py-2 text-xs text-[var(--accent)]"
                 >
                   {pasteNotice}
                 </div>
@@ -936,102 +964,112 @@ export function SettingsModal({
                   type="button"
                   aria-expanded={showManualTokens}
                   onClick={() => setShowManualTokens((prev) => !prev)}
-                  className="w-full h-8 flex items-center justify-between text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                  className="w-full h-8 flex items-center justify-between text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors duration-150 cursor-pointer"
                 >
                   <span>수동 토큰 직접 입력 (기존 Refresh Token 보유 시)</span>
-                  {showManualTokens ? (
-                    <ChevronUp size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  ) : (
-                    <ChevronDown size={15} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-                  )}
+                  <ChevronDown
+                    size={15}
+                    strokeWidth={1.5}
+                    data-open={showManualTokens ? 'true' : 'false'}
+                    className="chevron-rotate text-[var(--text-muted)]"
+                  />
                 </button>
 
-                {showManualTokens && (
-                  <div className="space-y-3 pt-2">
-                    <div>
-                      <label
-                        htmlFor="input-client-secret"
-                        className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
-                      >
-                        Client Secret (선택 · PKCE 토큰일 경우 비워둠)
-                      </label>
-                      <div className="relative flex items-center">
-                        <input
-                          id="input-client-secret"
-                          type={showSecret ? 'text' : 'password'}
-                          autoComplete="off"
-                          spellCheck={false}
-                          value={clientSecret}
-                          onPaste={handleSmartPaste}
-                          onChange={(e) => {
-                            setClientSecret(e.target.value);
-                            if (validationError) onClearValidationError();
-                          }}
-                          placeholder="시크릿 키"
-                          className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowSecret((prev) => !prev)}
-                          aria-label={showSecret ? 'Client Secret 숨기기' : 'Client Secret 표시'}
-                          className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                        >
-                          {showSecret ? (
-                            <EyeOff size={15} strokeWidth={1.5} />
-                          ) : (
-                            <Eye size={15} strokeWidth={1.5} />
-                          )}
-                        </button>
-                      </div>
-                    </div>
+                {manualTokensPresence.shouldRender && (
+                  <div
+                    data-presence={manualTokensPresence.phase}
+                    className="accordion-presence-grid"
+                  >
+                    <div className="accordion-presence-inner">
+                      <div className="space-y-3 pt-2">
+                        <div>
+                          <label
+                            htmlFor="input-client-secret"
+                            className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
+                          >
+                            Client Secret (선택 · PKCE 토큰일 경우 비워둠)
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              id="input-client-secret"
+                              type={showSecret ? 'text' : 'password'}
+                              autoComplete="off"
+                              spellCheck={false}
+                              value={clientSecret}
+                              onPaste={handleSmartPaste}
+                              onChange={(e) => {
+                                setClientSecret(e.target.value);
+                                if (validationError) onClearValidationError();
+                              }}
+                              placeholder="시크릿 키"
+                              className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowSecret((prev) => !prev)}
+                              aria-label={
+                                showSecret ? 'Client Secret 숨기기' : 'Client Secret 표시'
+                              }
+                              className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                            >
+                              {showSecret ? (
+                                <EyeOff size={15} strokeWidth={1.5} />
+                              ) : (
+                                <Eye size={15} strokeWidth={1.5} />
+                              )}
+                            </button>
+                          </div>
+                        </div>
 
-                    <div>
-                      <label
-                        htmlFor="input-refresh-token"
-                        className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
-                      >
-                        Refresh Token
-                      </label>
-                      <div className="relative flex items-center">
-                        <input
-                          id="input-refresh-token"
-                          type={showRefreshToken ? 'text' : 'password'}
-                          autoComplete="off"
-                          spellCheck={false}
-                          value={refreshToken}
-                          onPaste={handleSmartPaste}
-                          onChange={(e) => {
-                            setRefreshToken(e.target.value);
-                            if (validationError) onClearValidationError();
-                          }}
-                          placeholder="발급받은 리프레시 토큰"
-                          className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowRefreshToken((prev) => !prev)}
-                          aria-label={
-                            showRefreshToken ? 'Refresh Token 숨기기' : 'Refresh Token 표시'
-                          }
-                          className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
-                        >
-                          {showRefreshToken ? (
-                            <EyeOff size={15} strokeWidth={1.5} />
-                          ) : (
-                            <Eye size={15} strokeWidth={1.5} />
-                          )}
-                        </button>
-                      </div>
-                    </div>
+                        <div>
+                          <label
+                            htmlFor="input-refresh-token"
+                            className="block text-xs font-normal text-[var(--text-secondary)] mb-1"
+                          >
+                            Refresh Token
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              id="input-refresh-token"
+                              type={showRefreshToken ? 'text' : 'password'}
+                              autoComplete="off"
+                              spellCheck={false}
+                              value={refreshToken}
+                              onPaste={handleSmartPaste}
+                              onChange={(e) => {
+                                setRefreshToken(e.target.value);
+                                if (validationError) onClearValidationError();
+                              }}
+                              placeholder="발급받은 리프레시 토큰"
+                              className="w-full h-9 pl-3 pr-9 bg-[var(--bg-deepest)] border border-[var(--border-hairline)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--border-strong)] transition-colors duration-150"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowRefreshToken((prev) => !prev)}
+                              aria-label={
+                                showRefreshToken ? 'Refresh Token 숨기기' : 'Refresh Token 표시'
+                              }
+                              className="absolute right-1 w-7 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                            >
+                              {showRefreshToken ? (
+                                <EyeOff size={15} strokeWidth={1.5} />
+                              ) : (
+                                <Eye size={15} strokeWidth={1.5} />
+                              )}
+                            </button>
+                          </div>
+                        </div>
 
-                    <div className="flex justify-end">
-                      <button
-                        type="submit"
-                        disabled={isSpotifyConnecting}
-                        className="h-9 px-4 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-strong)] text-[var(--text-primary)] font-medium text-xs hover:bg-[#2c2c2f] active:scale-[0.97] disabled:opacity-50 transition-[background-color,transform] duration-150 cursor-pointer"
-                      >
-                        수동 토큰 저장 및 연결
-                      </button>
+                        <div className="flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={isSpotifyConnecting}
+                            className="h-9 px-4 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-strong)] text-[var(--text-primary)] font-medium text-xs hover:bg-[#2c2c2f] active:scale-[0.97] disabled:opacity-50 transition-[background-color,transform] duration-150 cursor-pointer"
+                          >
+                            수동 토큰 저장 및 연결
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}

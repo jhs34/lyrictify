@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Loader2, Search, X } from 'lucide-react';
+import { Check, Disc3, Loader2, Search, X } from 'lucide-react';
+import { usePresenceTransition } from '../hooks/usePresenceTransition';
 import { fetchLrcLibCandidates } from '../services/lrclib';
 import { LrcLibCandidate, TrackMetadata } from '../types/lyrics';
-import { formatDurationMs } from '../utils/lyrics';
+import { MODAL_EXIT_DURATION_MS, formatDurationMs } from '../utils/lyrics';
 
 interface OverflowMarqueeTextProps {
   text: string;
@@ -67,7 +68,9 @@ interface LyricPickerModalProps {
   track: TrackMetadata | null;
   initialCandidates: LrcLibCandidate[];
   selectedCandidateId: string | null;
+  isVinylViewActive?: boolean;
   onSelectCandidate: (candidate: LrcLibCandidate, mode: 'synced' | 'plain') => void;
+  onSelectNoLyrics?: () => void;
   onClose: () => void;
 }
 
@@ -76,13 +79,17 @@ export function LyricPickerModal({
   track,
   initialCandidates,
   selectedCandidateId,
+  isVinylViewActive = false,
   onSelectCandidate,
+  onSelectNoLyrics,
   onClose,
 }: LyricPickerModalProps) {
   const [query, setQuery] = useState<string>('');
   const [candidates, setCandidates] = useState<LrcLibCandidate[]>(initialCandidates);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [hasSearchedCustom, setHasSearchedCustom] = useState<boolean>(false);
+
+  const modalPresence = usePresenceTransition(isOpen, MODAL_EXIT_DURATION_MS);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -125,7 +132,7 @@ export function LyricPickerModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!modalPresence.shouldRender) return null;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,18 +156,20 @@ export function LyricPickerModal({
 
   return (
     <div
+      data-presence={modalPresence.phase}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onClose();
         }
       }}
-      className="fixed inset-0 z-50 isolate flex justify-center items-center p-4 bg-black/65 transition-colors duration-200"
+      className="modal-backdrop-presence fixed inset-0 z-50 isolate flex justify-center items-center p-4"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="lyric-picker-title"
-        className="surface-modal relative w-full max-w-[480px] rounded-2xl max-h-[82vh] flex flex-col overflow-hidden"
+        data-presence={modalPresence.phase}
+        className="surface-modal modal-dialog-presence relative w-full max-w-[480px] rounded-2xl max-h-[82vh] flex flex-col overflow-hidden"
       >
         <div className="flex items-center justify-between px-5 h-14 shrink-0 border-b border-[var(--border-hairline)]">
           <h2 id="lyric-picker-title" className="text-sm font-medium text-[var(--text-primary)]">
@@ -205,13 +214,71 @@ export function LyricPickerModal({
         </form>
 
         <div className="p-3 space-y-1.5 flex-1 overflow-y-auto modal-scroll-body min-h-[220px]">
+          {track && onSelectNoLyrics && (
+            <div
+              data-testid="lyric-picker-turntable-card"
+              className={`candidate-item-enter rounded-lg border p-3 transition-colors duration-150 ${
+                isVinylViewActive
+                  ? 'bg-[var(--bg-raised)] border-[var(--accent)]/60'
+                  : 'bg-[var(--bg-deepest)] border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={onSelectNoLyrics}
+                  className="flex-1 min-w-0 text-left cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Disc3
+                      size={15}
+                      strokeWidth={1.6}
+                      className={
+                        isVinylViewActive
+                          ? 'text-[var(--accent)] shrink-0'
+                          : 'text-[var(--text-secondary)] shrink-0'
+                      }
+                    />
+                    <span className="text-sm font-medium text-[var(--text-primary)] truncate">
+                      LP 턴테이블 모드
+                    </span>
+                    {isVinylViewActive && (
+                      <Check
+                        size={14}
+                        strokeWidth={1.5}
+                        className="text-[var(--accent)] shrink-0"
+                      />
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--text-secondary)] mt-0.5 truncate">
+                    가사를 숨기고 앨범 재킷과 회전하는 바이닐 원반으로 표시
+                  </p>
+                </button>
+
+                <div className="flex items-center gap-1.5 shrink-0 self-center">
+                  <button
+                    type="button"
+                    onClick={onSelectNoLyrics}
+                    className={`h-6 px-2.5 rounded-[4px] border text-[11px] font-medium transition-colors duration-150 cursor-pointer whitespace-nowrap ${
+                      isVinylViewActive
+                        ? 'border-[var(--accent)]/55 bg-[var(--accent)]/18 text-[var(--accent)]'
+                        : 'border-[var(--accent)]/45 bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20'
+                    }`}
+                  >
+                    {isVinylViewActive ? '적용됨' : '턴테이블 적용'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isSearching ? (
-            <div className="h-44 flex items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
+            <div className="h-36 flex items-center justify-center gap-2 text-xs text-[var(--text-secondary)]">
               <Loader2 size={16} strokeWidth={1.5} className="animate-spin text-[var(--text-muted)]" />
               <span>LRCLIB에서 가사 목록을 불러오는 중입니다</span>
             </div>
           ) : candidates.length === 0 ? (
-            <div className="h-44 flex flex-col items-center justify-center text-center px-6 space-y-1.5">
+            <div className="h-36 flex flex-col items-center justify-center text-center px-6 space-y-1.5">
               <p className="text-sm text-[var(--text-primary)]">
                 {hasSearchedCustom ? '일치하는 가사 후보가 없습니다' : '불러온 가사 후보가 없습니다'}
               </p>
@@ -221,13 +288,13 @@ export function LyricPickerModal({
             </div>
           ) : (
             candidates.map((item) => {
-              const isCurrent = selectedCandidateId === item.id;
+              const isCurrent = !isVinylViewActive && selectedCandidateId === item.id;
               const primaryMode: 'synced' | 'plain' = item.hasSynced ? 'synced' : 'plain';
 
               return (
                 <div
                   key={item.id}
-                  className={`rounded-lg border p-3 transition-colors duration-150 ${
+                  className={`candidate-item-enter rounded-lg border p-3 transition-colors duration-150 ${
                     isCurrent
                       ? 'bg-[var(--bg-raised)] border-[var(--accent)]/60'
                       : 'bg-[var(--bg-deepest)] border-[var(--border-hairline)] hover:border-[var(--border-strong)]'

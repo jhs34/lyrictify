@@ -1,13 +1,17 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Disc3, ListMusic } from 'lucide-react';
+import { usePresenceTransition } from '../hooks/usePresenceTransition';
 import { LyricLine, NumericSettingKey, TrackMetadata, UISettings, ViewerStatus } from '../types/lyrics';
 import { MarqueeText } from './MarqueeText';
 import { MediaControls } from './MediaControls';
+import { VinylSleeveShowcase } from './VinylSleeveShowcase';
 import {
   INTERLUDE_MIN_GAP_MS,
+  LAYOUT_MORPH_DURATION_MS,
   LYRIC_LINE_DEACTIVATE_DURATION_MS,
   LYRIC_WAVE_RAMP_IN_MS,
   LyricWordToken,
+  SPLIT_ASIDE_EXIT_DURATION_MS,
   WordVisualPosition,
   buildWordEntranceSpec,
   buildWordWaveSpec,
@@ -27,6 +31,8 @@ interface LyricsViewportProps {
   isPlainLyrics: boolean;
   lyricSource: string;
   isDesktopSplitActive: boolean;
+  isMorphingSplitTransition?: boolean;
+  isStackedVinylPlayer: boolean;
   showControls: boolean;
   isPlaying: boolean;
   isPreviewMode: boolean;
@@ -51,6 +57,8 @@ export function LyricsViewport({
   isPlainLyrics,
   lyricSource,
   isDesktopSplitActive,
+  isMorphingSplitTransition = false,
+  isStackedVinylPlayer,
   showControls,
   isPlaying,
   isPreviewMode,
@@ -76,8 +84,31 @@ export function LyricsViewport({
   const wordWaveElsRef = useRef<Array<Array<HTMLSpanElement | null>>>([]);
   const introWrapRef = useRef<HTMLDivElement | null>(null);
   const interludeSlotRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const lastTargetTranslateYRef = useRef<number | null>(null);
 
   const [splitImgFailed, setSplitImgFailed] = useState(false);
+  const lastNonNullTrackRef = useRef<TrackMetadata | null>(track);
+  if (track) {
+    lastNonNullTrackRef.current = track;
+  }
+
+  const isVinylShowcase = status === 'lyrics_not_found' && Boolean(track);
+  const showSplitAside = Boolean(isDesktopSplitActive && track && !isVinylShowcase);
+  const [wasMorphExit, setWasMorphExit] = useState(false);
+
+  if (showSplitAside && wasMorphExit) {
+    setWasMorphExit(false);
+  } else if (!showSplitAside && isMorphingSplitTransition && !wasMorphExit) {
+    setWasMorphExit(true);
+  }
+
+  const asideExitDurationMs = isMorphingSplitTransition
+    ? LAYOUT_MORPH_DURATION_MS + 1200
+    : wasMorphExit
+      ? 0
+      : SPLIT_ASIDE_EXIT_DURATION_MS;
+  const splitAsidePresence = usePresenceTransition(showSplitAside, asideExitDurationMs);
+  const splitDisplayTrack = track ?? lastNonNullTrackRef.current;
 
   useEffect(() => {
     setSplitImgFailed(false);
@@ -493,7 +524,7 @@ export function LyricsViewport({
             if (activeEl && activeIndexRef.current === capturedIdx) {
               activeEl.style.filter = 'none';
             }
-          }, 520);
+          }, 540);
         }
       } else if (el.classList.contains('active')) {
         el.classList.remove('active');
@@ -558,27 +589,31 @@ export function LyricsViewport({
         const lineEl = lineElsRef.current[activeIdx];
         const anchorHeight = lineEl ? lineEl.clientHeight : activeWrap.clientHeight;
         const translateY = restingOffsetTop - wrapper.clientHeight * vertRatio + anchorHeight / 2;
-        const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
-        if (introWrapRef.current) {
-          introWrapRef.current.style.transition = 'none';
-          introWrapRef.current.style.setProperty('--delay', '0s');
-          introWrapRef.current.style.transform = targetTransform;
-        }
-        for (const wrap of wrapElsRef.current) {
-          if (!wrap) continue;
-          wrap.style.transition = 'none';
-          wrap.style.setProperty('--delay', '0s');
-          wrap.style.transform = targetTransform;
-        }
-        // Flush computed transform while transition is 'none' so fontSize/layout changes reposition in 0ms without drifting off-screen
-        if (introWrapRef.current) {
-          void window.getComputedStyle(introWrapRef.current).transform;
-          introWrapRef.current.style.transition = '';
-        }
-        for (const wrap of wrapElsRef.current) {
-          if (!wrap) continue;
-          void window.getComputedStyle(wrap).transform;
-          wrap.style.transition = '';
+        const prevY = lastTargetTranslateYRef.current;
+
+        if (prevY === null || Math.abs(prevY - translateY) > 0.5) {
+          lastTargetTranslateYRef.current = translateY;
+          const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
+          if (introWrapRef.current) {
+            introWrapRef.current.style.transition = 'none';
+            introWrapRef.current.style.setProperty('--delay', '0s');
+            introWrapRef.current.style.transform = targetTransform;
+          }
+          for (const wrap of wrapElsRef.current) {
+            if (!wrap) continue;
+            wrap.style.transition = 'none';
+            wrap.style.setProperty('--delay', '0s');
+            wrap.style.transform = targetTransform;
+          }
+          // Single batched subtree style/layout flush (avoids N per-line forced reflows)
+          void content.offsetHeight;
+          if (introWrapRef.current) {
+            introWrapRef.current.style.transition = '';
+          }
+          for (const wrap of wrapElsRef.current) {
+            if (!wrap) continue;
+            wrap.style.transition = '';
+          }
         }
       }
     }
@@ -592,6 +627,7 @@ export function LyricsViewport({
     wordEnterElsRef.current = wordEnterElsRef.current.slice(0, lyrics.length);
     wordWaveElsRef.current = wordWaveElsRef.current.slice(0, lyrics.length);
     activeIndexRef.current = -1;
+    lastTargetTranslateYRef.current = null;
     lastInterludeKeyRef.current = '';
     targetManualOffsetRef.current = 0;
     manualOffsetRef.current = 0;
@@ -640,6 +676,7 @@ export function LyricsViewport({
     settings.fontSize,
     settings.lineHeight,
     settings.margin,
+    status,
     isDesktopSplitActive,
     alignLinesImmediately,
     syncActiveLineWaveLayout,
@@ -786,11 +823,7 @@ export function LyricsViewport({
           targetManualOffsetRef.current = 0;
         }
 
-        manualOffsetRef.current +=
-          (targetManualOffsetRef.current - manualOffsetRef.current) * 0.12;
-        if (Math.abs(manualOffsetRef.current) < 0.08 && targetManualOffsetRef.current === 0) {
-          manualOffsetRef.current = 0;
-        }
+        manualOffsetRef.current += (targetManualOffsetRef.current - manualOffsetRef.current) * 0.12;
 
         const roundedManual = Math.round(manualOffsetRef.current * 100) / 100;
         const nextTransform = `translate3d(0, ${-roundedManual}px, 0)`;
@@ -839,6 +872,7 @@ export function LyricsViewport({
 
             if (newActiveIndex === -1) {
               activeIndexRef.current = -1;
+              lastTargetTranslateYRef.current = 0;
               if (introWrapRef.current) {
                 introWrapRef.current.style.setProperty('--delay', '0s');
                 introWrapRef.current.style.transform = 'translate3d(0, 0px, 0)';
@@ -870,6 +904,7 @@ export function LyricsViewport({
                 const elementCenter = (lineEl ? lineEl.clientHeight : activeWrap.clientHeight) / 2;
                 const targetCenter = wrapper.clientHeight * (currentSettings.vertPos / 100);
                 const translateY = restingOffsetTop - targetCenter + elementCenter;
+                lastTargetTranslateYRef.current = translateY;
                 const targetTransform = `translate3d(0, ${-translateY}px, 0)`;
 
                 if (introWrapRef.current) {
@@ -896,16 +931,15 @@ export function LyricsViewport({
 
           // Smoothly ramp GPU compositor wave playbackRate on Play <-> Pause transitions without main-thread transform churn
           const targetRate = pb.isPlaying && !reducedMotionRef.current ? 1 : 0;
-          if (waveRateRef.current !== targetRate) {
-            const rateAlpha = 1 - Math.exp(-deltaTime / 220);
-            let nextRate = waveRateRef.current + (targetRate - waveRateRef.current) * rateAlpha;
-            if (Math.abs(targetRate - nextRate) < 0.004) {
-              nextRate = targetRate;
+          if (Math.abs(waveRateRef.current - targetRate) > 0.002) {
+            const rampFactor = 1 - Math.exp(-deltaTime / 240);
+            waveRateRef.current += (targetRate - waveRateRef.current) * rampFactor;
+            if (Math.abs(waveRateRef.current - targetRate) <= 0.003) {
+              waveRateRef.current = targetRate;
             }
-            waveRateRef.current = nextRate;
             const curAnimEntry = activeLineAnimsRef.current.get(activeIndexRef.current);
             if (curAnimEntry && curAnimEntry.settleTimer === null) {
-              const roundedRate = Math.round(nextRate * 1000) / 1000;
+              const roundedRate = Math.round(waveRateRef.current * 1000) / 1000;
               for (let i = 0; i < curAnimEntry.waveAnims.length; i++) {
                 curAnimEntry.waveAnims[i].playbackRate = roundedRate;
               }
@@ -950,40 +984,59 @@ export function LyricsViewport({
   };
 
   return (
-    <div className="relative z-10 flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center lg:gap-14 xl:gap-16 px-6 sm:px-12">
-      {/* Wide-Screen Dual Split View Left Artwork + Inline Apple Music Player Panel */}
-      {isDesktopSplitActive && track && (
+    <div className="lyrics-viewport-shell relative z-10 flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center lg:gap-14 xl:gap-16 px-6 sm:px-12">
+      {/* Wide-Screen Dual Split View Left Artwork + Inline Apple Music Player Panel (PPT Shared-Element Morph on Single <-> Split toggle) */}
+      {splitAsidePresence.shouldRender && splitDisplayTrack && (
         <aside
           aria-label="현재 재생 트랙 정보"
           data-testid="split-view-artwork-panel"
-          className="hud-layer-pinned relative z-20 flex flex-col w-[320px] xl:w-[356px] shrink-0 justify-center pb-8 select-none"
+          data-presence={splitAsidePresence.phase}
+          data-morph-mode={isMorphingSplitTransition || wasMorphExit ? 'morph' : 'fade'}
+          className="split-aside-presence hud-layer-pinned relative z-20 flex flex-col lg:h-full w-[320px] xl:w-[356px] shrink-0 justify-center pb-8 select-none"
         >
-          {track.albumArtUrl && !splitImgFailed ? (
-            <img
-              src={track.albumArtUrl}
-              alt={`${track.title} 앨범 커버`}
-              referrerPolicy="no-referrer"
-              onError={() => setSplitImgFailed(true)}
-              className="w-full aspect-square rounded-2xl object-cover border border-white/10 shadow-2xl"
+          <div data-morph-role="split-artwork-carrier" className="relative w-full aspect-square">
+            <div
+              aria-hidden="true"
+              data-morph-role="split-artwork-shadow"
+              data-playing={isPlaying ? 'true' : 'false'}
+              className="split-artwork-shadow-layer"
             />
-          ) : (
-            <div className="w-full aspect-square rounded-2xl bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center">
-              <Disc3 size={48} strokeWidth={1.5} className="text-[var(--text-muted)]" />
-            </div>
-          )}
+            {splitDisplayTrack.albumArtUrl && !splitImgFailed ? (
+              <img
+                src={splitDisplayTrack.albumArtUrl}
+                alt={`${splitDisplayTrack.title} 앨범 커버`}
+                data-morph-role="split-artwork"
+                referrerPolicy="no-referrer"
+                data-playing={isPlaying ? 'true' : 'false'}
+                onError={() => setSplitImgFailed(true)}
+                className="split-artwork-breathe relative z-10 w-full h-full rounded-2xl object-cover border border-white/10"
+              />
+            ) : (
+              <div
+                data-morph-role="split-artwork"
+                data-playing={isPlaying ? 'true' : 'false'}
+                className="split-artwork-breathe relative z-10 w-full h-full rounded-2xl bg-[var(--bg-card)] border border-[var(--border-hairline)] flex items-center justify-center"
+              >
+                <Disc3 size={48} strokeWidth={1.5} className="text-[var(--text-muted)]" />
+              </div>
+            )}
+          </div>
 
-          {/* Track Title & Artist (always visible, smooth sliding + edge fade when long) + Subtle Circular Lyric Picker Trigger (fades on idle) */}
-          <div className="mt-5 flex items-center justify-between gap-3 w-full">
+          {/* Track Title & Artist (in-place soft reveal/dissolve on view toggle) + Subtle Circular Lyric Picker Trigger */}
+          <div
+            data-morph-role="split-meta-row"
+            className="mt-5 flex items-center justify-between gap-3 w-full"
+          >
             <div className="min-w-0 flex-1">
               <MarqueeText
                 as="h2"
-                text={track.title}
+                text={splitDisplayTrack.title}
                 testId="split-track-title"
                 className="text-[17px] xl:text-lg font-semibold text-white leading-snug"
               />
               <MarqueeText
                 as="p"
-                text={track.artist}
+                text={splitDisplayTrack.artist}
                 testId="split-track-artist"
                 className="text-[14px] xl:text-[15px] text-white/65 mt-0.5"
               />
@@ -994,7 +1047,7 @@ export function LyricsViewport({
               onClick={onOpenLyricPicker}
               aria-label="가사 변경"
               title={lyricSource ? `가사 변경 · 출처: ${lyricSource}` : '가사 변경'}
-              className={`w-8 h-8 rounded-full bg-white/12 hover:bg-white/20 text-white/80 hover:text-white flex items-center justify-center shrink-0 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-200 cursor-pointer focus-visible:outline-2 focus-visible:outline-white ${
+              className={`w-8 h-8 rounded-full bg-white/12 hover:bg-white/20 text-white/80 hover:text-white flex items-center justify-center shrink-0 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-250 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer focus-visible:outline-2 focus-visible:outline-white ${
                 isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
               }`}
             >
@@ -1010,7 +1063,7 @@ export function LyricsViewport({
             isIdleHidden={isIdleHidden}
             isPlaying={isPlaying}
             isPreviewMode={isPreviewMode}
-            durationMs={track.durationMs || 45000}
+            durationMs={splitDisplayTrack.durationMs || 45000}
             progressAnchorMs={progressAnchorMs}
             anchorTimestamp={anchorTimestamp}
             onSeek={onSeekLyric}
@@ -1021,7 +1074,7 @@ export function LyricsViewport({
         </aside>
       )}
 
-      {/* Synced Lyrics Viewport (generous horizontal padding + matching negative margin prevents mask-image border-box from clipping Gaussian blur halos) */}
+      {/* Main Viewport: Synced Lyrics (with top/bottom mask) or Centered LP Vinyl Showcase (unmasked) */}
       <main
         ref={wrapperRef}
         id="lyrics-wrapper"
@@ -1030,18 +1083,23 @@ export function LyricsViewport({
             e.currentTarget.scrollTop = 0;
           }
         }}
-        className={`lyrics-mask relative z-10 flex-1 min-h-0 h-full overflow-y-clip overflow-x-visible ${
-          isDesktopSplitActive
-            ? '-mx-8 px-8 lg:-ml-12 lg:pl-14 lg:-mr-10 lg:pr-10'
-            : '-mx-8 px-8 sm:-mx-6 sm:px-12 md:-mx-4 md:px-16'
-        }`}
+        className={
+          isVinylShowcase
+            ? 'relative z-10 flex-1 min-h-0 h-full overflow-visible flex flex-col items-center justify-center'
+            : `lyrics-mask relative z-10 flex-1 min-h-0 h-full overflow-y-clip overflow-x-visible ${
+                isDesktopSplitActive
+                  ? '-mx-8 px-8 lg:-ml-12 lg:pl-14 lg:-mr-10 lg:pr-10'
+                  : '-mx-8 px-8 sm:-mx-6 sm:px-12 md:-mx-4 md:px-16'
+              }`
+        }
       >
         {status === 'lyrics_ready' && lyrics.length > 0 ? (
-          <div
-            ref={manualScrollRef}
-            id="manual-scroll-container"
-            className="w-full"
-          >
+          <div data-morph-role="lyrics-stage" className="w-full">
+            <div
+              ref={manualScrollRef}
+              id="manual-scroll-container"
+              className="w-full lyrics-stage-fade-enter"
+            >
             <div
               ref={contentRef}
               id="lyrics-content"
@@ -1178,49 +1236,108 @@ export function LyricsViewport({
                 </button>
               </div>
             </div>
+            </div>
           </div>
-        ) : (
+        ) : isVinylShowcase && track ? (
           <div
             ref={contentRef}
             id="lyrics-content"
             data-status={status}
             data-active-lyric-index="-1"
+            className={`w-full h-full flex flex-col items-center justify-center ${
+              isStackedVinylPlayer ? 'pb-4 sm:pb-6' : 'vinyl-single-stage-wrap'
+            }`}
+          >
+            <VinylSleeveShowcase
+              key={track.id}
+              track={track}
+              isPlaying={isPlaying}
+              variant={isStackedVinylPlayer ? 'split-stage' : 'single-stage'}
+            />
+
+            {isStackedVinylPlayer && (
+              <div
+                data-testid="vinyl-split-player-panel"
+                className="vinyl-player-panel-enter hud-layer-pinned relative z-20 flex flex-col w-full max-w-[304px] sm:max-w-[336px] md:max-w-[356px] xl:max-w-[372px] mt-6 sm:mt-7 select-none"
+              >
+                <div className="flex items-center justify-between gap-3 w-full">
+                  <div className="min-w-0 flex-1">
+                    <MarqueeText
+                      as="h2"
+                      text={track.title}
+                      testId="split-track-title"
+                      className="text-[16px] sm:text-[17px] xl:text-lg font-semibold text-white leading-snug"
+                    />
+                    <MarqueeText
+                      as="p"
+                      text={track.artist}
+                      testId="split-track-artist"
+                      className="text-[13px] sm:text-[14px] xl:text-[15px] text-white/65 mt-0.5"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={onOpenLyricPicker}
+                    aria-label="가사 변경"
+                    title="가사 변경 (LRCLIB)"
+                    className={`relative w-9 h-9 lg:w-8 lg:h-8 after:content-[''] after:absolute after:-inset-1.5 rounded-full bg-white/12 hover:bg-white/20 text-white/80 hover:text-white flex items-center justify-center shrink-0 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-200 cursor-pointer focus-visible:outline-2 focus-visible:outline-white ${
+                      isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                    }`}
+                  >
+                    <ListMusic size={15} strokeWidth={1.6} />
+                  </button>
+                </div>
+
+                <MediaControls
+                  variant="split"
+                  visible={showControls}
+                  hiddenBySetting={settings.hideControls}
+                  isIdleHidden={isIdleHidden}
+                  isPlaying={isPlaying}
+                  isPreviewMode={isPreviewMode}
+                  durationMs={track.durationMs || 45000}
+                  progressAnchorMs={progressAnchorMs}
+                  anchorTimestamp={anchorTimestamp}
+                  onSeek={onSeekLyric}
+                  onPrevious={onPrevious}
+                  onPlayPause={onPlayPause}
+                  onNext={onNext}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div
+            ref={contentRef}
+            id="lyrics-content"
+            data-morph-role="lyrics-stage"
+            data-status={status}
+            data-active-lyric-index="-1"
             className="h-full flex flex-col justify-center items-start max-w-lg pb-12"
           >
             {status === 'connecting' && (
-              <p className="text-xl sm:text-2xl font-medium text-[var(--text-secondary)]">
+              <p className="status-searching-breathe text-xl sm:text-2xl font-medium text-[var(--text-secondary)]">
                 Spotify 연결 중
               </p>
             )}
 
             {status === 'searching_lyrics' && (
-              <p className="text-xl sm:text-2xl font-medium text-[var(--text-secondary)]">
+              <p className="status-searching-breathe text-xl sm:text-2xl font-medium text-[var(--text-secondary)]">
                 LRCLIB에서 가사를 찾는 중
               </p>
             )}
 
             {status === 'lyrics_not_found' && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <p className="text-xl sm:text-2xl font-medium text-[var(--text-primary)]">
-                    등록된 가사가 없습니다
-                  </p>
-                  <p className="text-sm text-[var(--text-secondary)]">
-                    직접 제목을 바꾸어 LRCLIB 후보를 검색하거나 다른 곡을 재생해보세요
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={onOpenLyricPicker}
-                  className="h-9 px-4 rounded-lg bg-[var(--bg-raised)] border border-[var(--border-hairline)] text-sm text-[var(--text-primary)] hover:bg-[#2c2c2f] active:scale-[0.97] transition-[background-color,transform] duration-150 cursor-pointer"
-                >
-                  직접 가사 검색
-                </button>
+              <div className="notice-banner-enter space-y-2">
+                <p className="text-xl sm:text-2xl font-medium text-[var(--text-primary)]">
+                  재생 중인 곡 없음
+                </p>
               </div>
             )}
 
             {status === 'auth_error' && (
-              <div className="space-y-5">
+              <div className="notice-banner-enter space-y-5">
                 <div className="space-y-2">
                   <p className="text-xl sm:text-2xl font-medium text-[#e5484d]">
                     Spotify 인증을 확인해주세요
@@ -1249,7 +1366,7 @@ export function LyricsViewport({
             )}
 
             {status === 'spotify_idle' && (
-              <div className="space-y-2">
+              <div className="notice-banner-enter space-y-2">
                 <p className="text-xl sm:text-2xl font-medium text-[var(--text-primary)]">
                   재생 중인 곡 없음
                 </p>
@@ -1262,14 +1379,14 @@ export function LyricsViewport({
             {status === 'initial_empty' && (
               <div className="space-y-6">
                 <div className="space-y-2">
-                  <h2 className="text-2xl sm:text-3xl font-medium text-[var(--text-primary)] leading-tight break-keep">
+                  <h2 className="hero-stagger-1 text-2xl sm:text-3xl font-medium text-[var(--text-primary)] leading-tight break-keep">
                     재생 중인 곡의 싱크 가사를 화면 가득 띄웁니다
                   </h2>
-                  <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed break-keep">
+                  <p className="hero-stagger-2 text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed break-keep">
                     Spotify 계정을 원클릭으로 연결하거나 미리보기로 가사 흐름을 먼저 살펴보세요
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="hero-stagger-3 flex items-center gap-2">
                   <button
                     type="button"
                     onClick={onStartPreview}

@@ -19,8 +19,11 @@
   --accent: #e5a93c;
   --danger: #e5484d;
 
-  /* Single Easing Curve */
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Harmonic Fluid Easing System (Lyric crisp ease-out + UI cushioned fluid curves) */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-fluid: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-silk: cubic-bezier(0.22, 0.68, 0, 1);
+  --ease-exit: cubic-bezier(0.32, 0, 0.2, 1);
 
   /* Dynamic Lyric, Controller & Ambient Light Tokens */
   --lyric-base-size: 24px;
@@ -70,21 +73,21 @@ body,
   box-shadow: var(--inset-highlight), 0 4px 12px rgba(0, 0, 0, 0.24);
   backface-visibility: hidden;
   transition:
-    background-color 180ms var(--ease-out),
-    border-color 180ms var(--ease-out),
-    opacity 320ms var(--ease-out),
-    transform 320ms var(--ease-out);
+    background-color 240ms var(--ease-fluid),
+    border-color 240ms var(--ease-fluid),
+    opacity 380ms var(--ease-silk),
+    transform 360ms var(--ease-fluid);
 }
 
 .surface-modal {
   background-color: var(--bg-card);
   border: 1px solid var(--border-hairline);
-  box-shadow: var(--inset-highlight), 0 20px 48px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--inset-highlight), 0 24px 56px rgba(0, 0, 0, 0.48);
   contain: layout style;
   transition:
-    background-color 200ms var(--ease-out),
-    border-color 200ms var(--ease-out),
-    box-shadow 200ms var(--ease-out);
+    background-color 260ms var(--ease-fluid),
+    border-color 260ms var(--ease-fluid),
+    box-shadow 260ms var(--ease-fluid);
 }
 
 .modal-scroll-body {
@@ -99,7 +102,7 @@ body,
 }
 
 .hide-on-drag {
-  transition: opacity 180ms var(--ease-out);
+  transition: opacity 240ms var(--ease-fluid);
 }
 
 .surface-modal.transparent-mode .hide-on-drag {
@@ -135,9 +138,9 @@ body,
   text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
   transition:
-    filter 500ms var(--ease-out),
-    opacity 500ms var(--ease-out),
-    color 200ms var(--ease-out);
+    filter 0.5s var(--ease-out),
+    opacity 0.5s var(--ease-out),
+    color 0.3s ease;
   word-break: keep-all;
   overflow-wrap: break-word;
   max-width: 88%;
@@ -188,16 +191,16 @@ body,
   margin-inline: -16px;
   pointer-events: none;
   transition:
-    grid-template-rows 680ms var(--ease-out),
-    opacity 460ms var(--ease-out);
+    grid-template-rows 640ms var(--ease-out),
+    opacity 420ms var(--ease-out);
 }
 
 .interlude-slot[data-active="true"] {
   grid-template-rows: 1fr;
   opacity: 1;
   transition:
-    grid-template-rows 680ms var(--ease-out),
-    opacity 540ms var(--ease-out);
+    grid-template-rows 640ms var(--ease-out),
+    opacity 520ms var(--ease-out);
 }
 
 .interlude-slot-clip {
@@ -379,11 +382,21 @@ input[type="range"].lyrictify-range::-webkit-slider-thumb {
   cursor: pointer;
   margin-top: -5px;
   border: 1px solid rgba(15, 15, 16, 0.45);
-  transition: background-color 150ms var(--ease-out);
+  transform: scale(1);
+  transition:
+    background-color 220ms var(--ease-fluid),
+    transform 220ms var(--ease-fluid),
+    box-shadow 220ms var(--ease-fluid);
 }
 
 input[type="range"].lyrictify-range::-webkit-slider-thumb:hover {
   background: #f0bc59;
+  transform: scale(1.14);
+  box-shadow: 0 2px 8px rgba(229, 169, 60, 0.35);
+}
+
+input[type="range"].lyrictify-range:active::-webkit-slider-thumb {
+  transform: scale(1.05);
 }
 
 input[type="range"].lyrictify-range::-moz-range-track {
@@ -437,8 +450,8 @@ input[type="number"].no-spinner {
   opacity: 1;
   transform: translate3d(-50%, -50%, 0) scale(1);
   transition:
-    opacity 380ms cubic-bezier(0.38, 0, 0.16, 1),
-    transform 220ms cubic-bezier(0.38, 0, 0.16, 1);
+    opacity 420ms var(--ease-silk),
+    transform 280ms var(--ease-fluid);
 }
 
 .apple-scrubber-dot[data-idle-hidden="true"] {
@@ -449,7 +462,7 @@ input[type="number"].no-spinner {
 
 .apple-scrubber-shell:not([data-idle-hidden="true"]):hover .apple-scrubber-dot,
 .apple-scrubber-shell:not([data-idle-hidden="true"]):active .apple-scrubber-dot {
-  transform: translate3d(-50%, -50%, 0) scale(1.28);
+  transform: translate3d(-50%, -50%, 0) scale(1.3);
 }
 
 .apple-scrubber-input:focus-visible ~ div .apple-scrubber-dot,
@@ -473,7 +486,7 @@ input[type="number"].no-spinner {
   .header-default-bar {
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: 0;
-    min-height: 3.5rem;
+    min-height: 4rem;
   }
 }
 
@@ -777,7 +790,7 @@ input[type="number"].no-spinner {
   }
 }
 
-@media (orientation: landscape) and (max-height: 520px) and (max-width: 1023px) {
+@media (orientation: landscape) and (max-height: 540px) and (max-width: 1023px) {
   #main-header.header-inline-player {
     padding-left: max(1.125rem, calc(env(safe-area-inset-left, 0px) + 0.875rem));
     padding-right: max(1.125rem, calc(env(safe-area-inset-right, 0px) + 0.875rem));
@@ -816,12 +829,785 @@ input[type="number"].no-spinner {
 
 .ambient-light-stage {
   pointer-events: none;
-  transition: opacity 750ms var(--ease-out);
+  transition: opacity 1050ms var(--ease-silk);
 }
 
 .ambient-shader-canvas {
   pointer-events: none;
   backface-visibility: hidden;
+}
+
+/* Half-Ejected LP Vinyl & Matte Jacket Sleeve Showcase (No-Lyrics Listening Mode) */
+.vinyl-single-stage-wrap {
+  padding-bottom: 3.25rem;
+}
+
+@media ((min-width: 768px) and (max-width: 1023px)),
+  ((orientation: landscape) and (min-width: 480px) and (max-width: 1023px)) {
+  .vinyl-single-stage-wrap {
+    padding-bottom: 3.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .vinyl-single-stage-wrap {
+    padding-bottom: 1.5rem;
+  }
+}
+
+.vinyl-showcase-unit {
+  --vinyl-sleeve-size: clamp(164px, min(50vw, 27dvh), 202px);
+  position: relative;
+  width: calc(var(--vinyl-sleeve-size) * 1.54);
+  height: var(--vinyl-sleeve-size);
+  margin-inline: auto;
+  user-select: none;
+  isolation: isolate;
+}
+
+@media (min-width: 640px) {
+  .vinyl-showcase-unit {
+    --vinyl-sleeve-size: clamp(196px, 31dvh, 228px);
+  }
+}
+
+@media (min-width: 768px) {
+  .vinyl-showcase-unit {
+    --vinyl-sleeve-size: clamp(204px, 31dvh, 256px);
+  }
+}
+
+@media (min-width: 1024px) {
+  .vinyl-showcase-unit[data-stage-variant="single-stage"] {
+    --vinyl-sleeve-size: clamp(236px, 37dvh, 304px);
+  }
+
+  .vinyl-showcase-unit[data-stage-variant="split-stage"] {
+    --vinyl-sleeve-size: clamp(212px, 32dvh, 272px);
+  }
+}
+
+@media (min-width: 1280px) {
+  .vinyl-showcase-unit[data-stage-variant="split-stage"] {
+    --vinyl-sleeve-size: clamp(232px, 33dvh, 294px);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 540px) and (max-width: 1023px) {
+  .vinyl-single-stage-wrap {
+    padding-bottom: 2.85rem;
+  }
+
+  .vinyl-showcase-unit {
+    --vinyl-sleeve-size: clamp(110px, 36dvh, 144px);
+  }
+}
+
+.vinyl-floor-shadow {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: -9%;
+  height: 18%;
+  border-radius: 9999px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0.52) 0%,
+    rgba(0, 0, 0, 0.22) 52%,
+    transparent 78%
+  );
+  filter: blur(10px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.vinyl-platter-shell {
+  position: absolute;
+  top: 2.5%;
+  right: 0;
+  width: calc(var(--vinyl-sleeve-size) * 0.95);
+  height: calc(var(--vinyl-sleeve-size) * 0.95);
+  border-radius: 9999px;
+  z-index: 1;
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.56),
+    0 2px 8px rgba(0, 0, 0, 0.42);
+}
+
+.vinyl-platter-rotor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  overflow: hidden;
+  will-change: transform;
+  backface-visibility: hidden;
+  background:
+    radial-gradient(
+      circle at center,
+      transparent 0%,
+      transparent 35.5%,
+      rgba(0, 0, 0, 0.65) 36.2%,
+      transparent 37.5%,
+      transparent 53.6%,
+      rgba(0, 0, 0, 0.48) 54.3%,
+      transparent 55.1%,
+      transparent 72.4%,
+      rgba(0, 0, 0, 0.46) 73.1%,
+      transparent 73.9%,
+      transparent 95.5%,
+      rgba(255, 255, 255, 0.06) 98.4%,
+      #09090b 100%
+    ),
+    repeating-radial-gradient(
+      circle at center,
+      #141416 0px,
+      #141416 1.4px,
+      #0c0c0e 2.2px,
+      #18181b 3.3px
+    );
+}
+
+/* Subtle rotational texture variation on lacquer so 33⅓ RPM motion is organically perceptible */
+.vinyl-platter-grain {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from 15deg,
+    rgba(255, 255, 255, 0.025) 0deg,
+    transparent 55deg,
+    rgba(0, 0, 0, 0.16) 130deg,
+    rgba(255, 255, 255, 0.022) 205deg,
+    transparent 275deg,
+    rgba(0, 0, 0, 0.14) 330deg,
+    rgba(255, 255, 255, 0.025) 360deg
+  );
+  pointer-events: none;
+}
+
+.vinyl-center-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36%;
+  height: 36%;
+  transform: translate(-50%, -50%);
+  border-radius: 9999px;
+  overflow: hidden;
+  background-color: #202024;
+  box-shadow:
+    0 0 0 2px rgba(10, 10, 12, 0.88),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.vinyl-center-label::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle at 35% 30%,
+    rgba(255, 255, 255, 0.1) 0%,
+    transparent 56%,
+    rgba(0, 0, 0, 0.28) 100%
+  );
+  pointer-events: none;
+}
+
+.vinyl-label-ring {
+  position: absolute;
+  inset: 14%;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.26);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Stationary room-light anisotropic specular reflection + sleeve pocket shadow */
+.vinyl-platter-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to right,
+      rgba(0, 0, 0, 0.62) 0%,
+      rgba(0, 0, 0, 0.5) 40%,
+      rgba(0, 0, 0, 0.18) 48%,
+      transparent 58%
+    ),
+    conic-gradient(
+      from 28deg,
+      transparent 0deg,
+      rgba(255, 255, 255, 0.085) 20deg,
+      rgba(255, 255, 255, 0.13) 31deg,
+      rgba(255, 255, 255, 0.065) 43deg,
+      transparent 66deg,
+      transparent 180deg,
+      rgba(255, 255, 255, 0.06) 200deg,
+      rgba(255, 255, 255, 0.095) 211deg,
+      rgba(255, 255, 255, 0.045) 223deg,
+      transparent 246deg,
+      transparent 360deg
+    );
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 0 10px rgba(0, 0, 0, 0.55);
+}
+
+.vinyl-spindle-hole {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5%;
+  height: 5%;
+  min-width: 7px;
+  min-height: 7px;
+  transform: translate(-50%, -50%);
+  border-radius: 9999px;
+  background-color: var(--bg-deepest);
+  box-shadow:
+    inset 0 1px 2.5px rgba(0, 0, 0, 0.9),
+    0 0 0 1.5px rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.vinyl-sleeve-card {
+  position: relative;
+  z-index: 2;
+  width: var(--vinyl-sleeve-size);
+  height: var(--vinyl-sleeve-size);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: var(--bg-card);
+  box-shadow:
+    12px 6px 26px rgba(0, 0, 0, 0.55),
+    0 18px 40px rgba(0, 0, 0, 0.36),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.11);
+}
+
+@media (min-width: 640px) {
+  .vinyl-sleeve-card {
+    border-radius: 14px;
+  }
+}
+
+/* Subtle paperboard spine crease & right pocket edge highlight */
+.vinyl-sleeve-finish {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.13) 0px,
+      rgba(0, 0, 0, 0.22) 3px,
+      rgba(255, 255, 255, 0.04) 5px,
+      transparent 10px,
+      transparent calc(100% - 2px),
+      rgba(0, 0, 0, 0.28) 100%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.07) 0%,
+      transparent 42%,
+      rgba(0, 0, 0, 0.16) 100%
+    );
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* ==========================================================================
+   Site-Wide Listening-Room Motion System (Velvety Fluid GPU Compositor)
+   ========================================================================== */
+
+/* 1. GPU-Composited Modal Scrim & Cushioned Dialog Presence Transitions */
+.modal-backdrop-presence {
+  position: fixed;
+  inset: 0;
+}
+
+.modal-backdrop-presence::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.66);
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+  transition: opacity 380ms var(--ease-silk);
+}
+
+.modal-backdrop-presence[data-presence="entered"]::before {
+  opacity: 1;
+}
+
+.modal-backdrop-presence.backdrop-transparent-drag[data-presence="entered"]::before {
+  opacity: 0;
+  transition: opacity 220ms var(--ease-fluid);
+}
+
+.modal-backdrop-presence[data-presence="exiting"] {
+  pointer-events: none;
+}
+
+.modal-backdrop-presence[data-presence="exiting"]::before {
+  opacity: 0;
+  transition: opacity 270ms var(--ease-exit);
+}
+
+.modal-dialog-presence {
+  opacity: 0;
+  transform: translate3d(0, 14px, 0) scale(0.96);
+  transform-origin: center center;
+  will-change: transform, opacity;
+  transition:
+    opacity 360ms var(--ease-fluid),
+    transform 420ms var(--ease-fluid),
+    background-color 260ms var(--ease-fluid),
+    border-color 260ms var(--ease-fluid),
+    box-shadow 260ms var(--ease-fluid);
+}
+
+.modal-dialog-presence[data-presence="entered"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.modal-dialog-presence[data-presence="exiting"] {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.978);
+  pointer-events: none;
+  transition:
+    opacity 250ms var(--ease-exit),
+    transform 275ms var(--ease-exit),
+    background-color 220ms var(--ease-exit),
+    border-color 220ms var(--ease-exit),
+    box-shadow 220ms var(--ease-exit);
+}
+
+/* 2. Segmented Tab Sliding Indicator & Panel Switch */
+.segmented-tab-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: 6px;
+  background-color: var(--bg-raised);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transform: translate3d(0%, 0, 0);
+  transition: transform 380ms var(--ease-fluid);
+  pointer-events: none;
+}
+
+.segmented-tab-pill[data-tab="spotify"] {
+  transform: translate3d(100%, 0, 0);
+}
+
+.tab-panel-enter {
+  animation: ui-panel-fade-lift 340ms var(--ease-fluid) both;
+}
+
+/* 3. Smooth Collapsible Disclosure Drawers (0fr <-> 1fr + Inner Content Glide) */
+.accordion-presence-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 380ms var(--ease-fluid),
+    opacity 320ms var(--ease-silk);
+}
+
+.accordion-presence-grid[data-presence="entered"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.accordion-presence-grid[data-presence="exiting"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    grid-template-rows 320ms var(--ease-exit),
+    opacity 240ms var(--ease-exit);
+}
+
+.accordion-presence-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.accordion-presence-inner > * {
+  opacity: 0;
+  transform: translate3d(0, -6px, 0);
+  transition:
+    opacity 320ms var(--ease-silk) 25ms,
+    transform 380ms var(--ease-fluid);
+}
+
+.accordion-presence-grid[data-presence="entered"] > .accordion-presence-inner > * {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.accordion-presence-grid[data-presence="exiting"] > .accordion-presence-inner > * {
+  opacity: 0;
+  transform: translate3d(0, -4px, 0);
+  transition:
+    opacity 210ms var(--ease-exit),
+    transform 260ms var(--ease-exit);
+}
+
+.chevron-rotate {
+  transition:
+    transform 360ms var(--ease-fluid),
+    color 220ms var(--ease-fluid);
+}
+
+.chevron-rotate[data-open="true"] {
+  transform: rotate(180deg);
+}
+
+/* 4. Viewport Stage, Header, Candidate Stagger & Toast Entrances */
+@keyframes ui-panel-fade-lift {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ui-fade-only {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ui-stage-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.982);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes ui-toast-pop {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -5px, 0) scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes vinyl-pocket-slide-out {
+  from {
+    opacity: 0.25;
+    transform: translate3d(-28%, 0, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes status-soft-breathe {
+  0%,
+  100% {
+    opacity: 0.54;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Pure opacity fade on lyrics scroll container so lyric offsetTop/transform math stays 0.0px exact */
+.lyrics-stage-fade-enter {
+  animation: ui-fade-only 420ms var(--ease-out) both;
+}
+
+.vinyl-stage-enter {
+  animation: ui-stage-rise 620ms var(--ease-fluid) both;
+}
+
+.vinyl-platter-shell {
+  animation: vinyl-pocket-slide-out 920ms var(--ease-silk) 55ms both;
+}
+
+.vinyl-player-panel-enter {
+  animation: ui-panel-fade-lift 560ms var(--ease-fluid) 115ms both;
+}
+
+/* Desktop Split View Aside Presence (Enter + GPU Overlay Exit without Reflow Thrashing) */
+.split-aside-presence {
+  opacity: 0;
+  transform: translate3d(-22px, 0, 0) scale(0.968);
+  will-change: transform, opacity;
+  transition:
+    opacity 460ms var(--ease-silk),
+    transform 520ms var(--ease-fluid);
+}
+
+.split-aside-presence[data-presence="entered"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.split-aside-presence[data-presence="exiting"] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3rem;
+  opacity: 0;
+  transform: translate3d(-26px, 0, 0) scale(0.965);
+  pointer-events: none;
+  transition:
+    opacity 300ms var(--ease-exit),
+    transform 350ms var(--ease-exit);
+}
+
+/* Shared-Element PPT Morph System (Cover + Lyrics glide; Player Chrome uses in-place reveal/dissolve) */
+.app-viewport-root[data-layout-morph] .lyrics-viewport-shell {
+  z-index: 30;
+}
+
+.app-viewport-root[data-layout-morph] .header-identity-enter {
+  animation: none;
+}
+
+.split-aside-presence[data-morph-mode="morph"],
+.split-aside-presence[data-morph-mode="morph"][data-presence="entered"] {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
+.split-aside-presence[data-morph-mode="morph"][data-presence="exiting"] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3rem;
+  opacity: 1;
+  transform: none;
+  pointer-events: none;
+  transition: none;
+}
+
+.app-viewport-root[data-layout-morph] [data-morph-role="split-artwork-carrier"],
+.app-viewport-root[data-layout-morph] [data-morph-role="lyrics-stage"] {
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+[data-morph-role="split-artwork-carrier"],
+[data-morph-role="split-meta-row"],
+[data-morph-role="split-scrubber-group"],
+[data-morph-role="split-transport"],
+[data-morph-role="header-player-group"],
+[data-morph-role="header-transport"],
+[data-morph-role="header-lyric-picker"] {
+  transform-origin: center center;
+}
+
+[data-morph-role="header-meta"] {
+  transform-origin: left center;
+}
+
+@keyframes header-chrome-sink-out {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -5px, 0) scale(0.985);
+  }
+}
+
+@keyframes header-brand-rise-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 5px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.header-chrome-exiting {
+  pointer-events: none;
+  animation: header-chrome-sink-out 200ms var(--ease-exit) both;
+}
+
+.header-brand-soft-enter {
+  animation: header-brand-rise-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Decoupled GPU shadow layer so scaling/rounding the cover never re-rasterizes a heavy blur shadow */
+.split-artwork-shadow-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 1rem;
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  transform: translateZ(0) scale(1);
+  transition:
+    transform 700ms var(--ease-silk),
+    opacity 420ms var(--ease-silk);
+}
+
+.split-artwork-shadow-layer[data-playing="false"] {
+  transform: translateZ(0) scale(0.948);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.34);
+}
+
+/* Apple-Music-inspired tactile play/pause artwork breathing in Split View */
+.split-artwork-breathe {
+  transform: translateZ(0) scale(1);
+  transition:
+    transform 700ms var(--ease-silk),
+    opacity 420ms var(--ease-silk);
+}
+
+.split-artwork-breathe[data-playing="false"] {
+  transform: translateZ(0) scale(0.948);
+}
+
+/* Header track & toast animations */
+.header-identity-enter {
+  animation: ui-panel-fade-lift 380ms var(--ease-fluid) both;
+}
+
+.sync-toast-enter {
+  animation: ui-toast-pop 300ms var(--ease-fluid) both;
+}
+
+.notice-banner-enter {
+  animation: ui-panel-fade-lift 320ms var(--ease-fluid) both;
+}
+
+.status-searching-breathe {
+  animation: status-soft-breathe 2.4s ease-in-out infinite;
+}
+
+/* Staggered empty/hero entrance */
+.hero-stagger-1 {
+  animation: ui-panel-fade-lift 520ms var(--ease-fluid) both;
+}
+
+.hero-stagger-2 {
+  animation: ui-panel-fade-lift 540ms var(--ease-fluid) 75ms both;
+}
+
+.hero-stagger-3 {
+  animation: ui-panel-fade-lift 560ms var(--ease-fluid) 150ms both;
+}
+
+/* Staggered candidate cards in LyricPickerModal */
+.candidate-item-enter {
+  animation: ui-panel-fade-lift 360ms var(--ease-fluid) both;
+}
+
+.candidate-item-enter:nth-child(2) {
+  animation-delay: 35ms;
+}
+
+.candidate-item-enter:nth-child(3) {
+  animation-delay: 70ms;
+}
+
+.candidate-item-enter:nth-child(4) {
+  animation-delay: 105ms;
+}
+
+.candidate-item-enter:nth-child(5) {
+  animation-delay: 140ms;
+}
+
+.candidate-item-enter:nth-child(6) {
+  animation-delay: 175ms;
+}
+
+.candidate-item-enter:nth-child(7) {
+  animation-delay: 210ms;
+}
+
+.candidate-item-enter:nth-child(8) {
+  animation-delay: 245ms;
+}
+
+/* Play <-> Pause Crossfade & Micro-Scale Morph */
+.play-pause-icon-slot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.play-pause-glyph {
+  transition:
+    opacity 240ms var(--ease-fluid),
+    transform 280ms var(--ease-fluid);
+}
+
+.play-pause-glyph[data-visible="true"] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.play-pause-glyph[data-visible="false"] {
+  position: absolute;
+  opacity: 0;
+  transform: scale(0.68);
+  pointer-events: none;
+}
+
+/* Subtle Scrubber Track Expansion on Hover / Scrub */
+.apple-scrubber-track {
+  transform: scaleY(1);
+  transition:
+    transform 280ms var(--ease-fluid),
+    background-color 260ms var(--ease-fluid);
+}
+
+.apple-scrubber-shell:not([data-idle-hidden="true"]):hover .apple-scrubber-track,
+.apple-scrubber-shell[data-scrubbing="true"] .apple-scrubber-track {
+  transform: scaleY(1.48);
+  background-color: rgba(255, 255, 255, 0.34);
+}
+
+/* Tactile Toolbar & Card Hover Micro-Lift */
+.toolbar-icon-btn {
+  transition:
+    background-color 240ms var(--ease-fluid),
+    border-color 240ms var(--ease-fluid),
+    color 240ms var(--ease-fluid),
+    transform 240ms var(--ease-fluid),
+    opacity 380ms var(--ease-silk);
+}
+
+.toolbar-icon-btn:hover {
+  transform: translate3d(0, -1px, 0);
+}
+
+.toolbar-icon-btn:active {
+  transform: translate3d(0, 0, 0) scale(0.95);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -831,20 +1617,50 @@ input[type="number"].no-spinner {
   .interlude-dots-stage,
   .surface-floating,
   .surface-modal,
-  .ambient-light-stage {
-    transition-duration: 120ms;
+  .ambient-light-stage,
+  .modal-backdrop-presence,
+  .modal-backdrop-presence::before,
+  .modal-dialog-presence,
+  .segmented-tab-pill,
+  .accordion-presence-grid,
+  .accordion-presence-inner > *,
+  .chevron-rotate,
+  .split-aside-presence,
+  .split-artwork-breathe,
+  .play-pause-glyph,
+  .apple-scrubber-track,
+  .toolbar-icon-btn {
+    transition-duration: 80ms;
   }
 
-  .interlude-dot {
+  .interlude-dot,
+  .status-searching-breathe {
     animation: none;
-    opacity: 0.65;
+    opacity: 0.72;
   }
 
   .lyric-marquee-mask,
   .marquee-fade-mask,
   .lyric-marquee-track,
-  .marquee-fade-track {
+  .marquee-fade-track,
+  .tab-panel-enter,
+  .lyrics-stage-fade-enter,
+  .vinyl-stage-enter,
+  .vinyl-platter-shell,
+  .vinyl-player-panel-enter,
+  .header-identity-enter,
+  .sync-toast-enter,
+  .notice-banner-enter,
+  .hero-stagger-1,
+  .hero-stagger-2,
+  .hero-stagger-3,
+  .candidate-item-enter {
     animation: none;
+  }
+
+  .vinyl-platter-rotor {
+    transform: none !important;
+    will-change: auto !important;
   }
 }
 

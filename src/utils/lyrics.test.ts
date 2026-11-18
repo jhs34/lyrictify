@@ -13,6 +13,8 @@ import {
   DEFAULT_UI_SETTINGS,
   INTERLUDE_HOLD_AFTER_VOCAL_MS,
   INTERLUDE_MIN_GAP_MS,
+  LAYOUT_MORPH_DURATION_MS,
+  LAYOUT_MORPH_EASING,
   PREVIEW_LRC,
   UI_PRESETS,
   LYRIC_WAVE_ROW_DELAY_MS,
@@ -22,9 +24,11 @@ import {
   buildWordWaveSpec,
   clampSettingValue,
   cleanTitle,
+  computeHorizontalStageFlipDx,
   computeInterludeState,
   computeLyricVisualStyle,
   computeMarqueeMetrics,
+  computeSharedMorphTransform,
   computeTrackProgressMs,
   computeWordVisualPositions,
   deriveSecondaryAmbientColor,
@@ -36,16 +40,23 @@ import {
   formatDurationMs,
   formatRemainingTimeMs,
   formatSyncOffsetLabel,
+  isMobileLandscapeViewport,
   normalizeLrcLibCandidates,
   parseLRC,
   parsePastedCredentials,
   parsePlainLyrics,
   parseTitleAndVersion,
   resetSingleSetting,
+  resolvePresencePhaseOnToggle,
   selectBestLyricsFromCandidates,
   shouldResyncPlaybackClock,
+  stepExponentialSmoothing,
   stepSyncOffset,
+  stepTurntableSpinRate,
   tokenizeLyricWords,
+  TURNTABLE_REV_DURATION_MS,
+  TURNTABLE_SPINDOWN_TAU_MS,
+  TURNTABLE_SPINUP_TAU_MS,
 } from './lyrics';
 import {
   base64UrlEncode,
@@ -731,8 +742,164 @@ test('computeWordVisualPositions detects wrapped lyric rows and buildWordWaveSpe
   ]);
 });
 
+test('stepTurntableSpinRate models smooth motor spin-up and slower mechanical platter coast-down inertia', () => {
+  assert.equal(TURNTABLE_REV_DURATION_MS, 14000);
+  assert.equal(TURNTABLE_SPINDOWN_TAU_MS > TURNTABLE_SPINUP_TAU_MS, true);
 
+  // Spin-up from 0 -> 1 monotonically and snaps cleanly to 1
+  let upRate = 0;
+  for (let frame = 0; frame < 240; frame++) {
+    const next = stepTurntableSpinRate(upRate, true, 16.67);
+    assert.equal(next >= upRate && next <= 1, true);
+    upRate = next;
+  }
+  assert.equal(upRate, 1);
 
+  // At 300ms elapsed, platter coast-down retains more momentum than spin-up gap (slower decay tau)
+  const afterSpinUp300 = stepTurntableSpinRate(0, true, 200);
+  const afterSpinDown300 = stepTurntableSpinRate(1, false, 200);
+  assert.equal(afterSpinDown300 > 1 - afterSpinUp300, true);
+
+  // Coast-down from 1 -> 0 monotonically and snaps cleanly to 0 without negative overshoot
+  let downRate = 1;
+  for (let frame = 0; frame < 360; frame++) {
+    const next = stepTurntableSpinRate(downRate, false, 16.67);
+    assert.equal(next <= downRate && next >= 0, true);
+    downRate = next;
+  }
+  assert.equal(downRate, 0);
+
+  // Handles non-finite or oversized background-tab deltaMs safely
+  assert.equal(stepTurntableSpinRate(Number.NaN, false, 16), 0);
+  assert.equal(stepTurntableSpinRate(0.5, true, 10000) <= 1, true);
+});
+
+test('isMobileLandscapeViewport isolates phone landscape while keeping mobile portrait, tablet portrait/landscape, and desktop in stacked turntable mode', () => {
+  // Mobile portrait -> false (stacked player below vinyl)
+  assert.equal(isMobileLandscapeViewport(390, 844), false);
+  assert.equal(isMobileLandscapeViewport(375, 667), false);
+  assert.equal(isMobileLandscapeViewport(430, 932), false);
+
+  // Mobile landscape -> true (excluded from stacked player; uses inline header + bottom dock)
+  assert.equal(isMobileLandscapeViewport(844, 390), true);
+  assert.equal(isMobileLandscapeViewport(667, 375), true);
+  assert.equal(isMobileLandscapeViewport(932, 430), true);
+
+  // Tablet portrait & tablet landscape -> false (stacked player below vinyl)
+  assert.equal(isMobileLandscapeViewport(768, 1024), false);
+  assert.equal(isMobileLandscapeViewport(820, 1180), false);
+  assert.equal(isMobileLandscapeViewport(1024, 768), false);
+  assert.equal(isMobileLandscapeViewport(1180, 820), false);
+  assert.equal(isMobileLandscapeViewport(960, 600), false);
+
+  // Desktop -> false (stacked player below vinyl)
+  assert.equal(isMobileLandscapeViewport(1440, 900), false);
+  assert.equal(isMobileLandscapeViewport(1280, 720), false);
+});
+
+test('resolvePresencePhaseOnToggle handles enter, exit, mid-exit reopen, and reduced motion cleanly', () => {
+  // Normal open from unmounted -> entering -> entered
+  assert.equal(resolvePresencePhaseOnToggle('unmounted', true, false), 'entering');
+  assert.equal(resolvePresencePhaseOnToggle('entered', true, false), 'entered');
+
+  // Normal close from entered or entering -> exiting
+  assert.equal(resolvePresencePhaseOnToggle('entered', false, false), 'exiting');
+  assert.equal(resolvePresencePhaseOnToggle('entering', false, false), 'exiting');
+
+  // Rapid reopen while exiting -> smoothly reverses directly to entered
+  assert.equal(resolvePresencePhaseOnToggle('exiting', true, false), 'entered');
+
+  // Closing when already unmounted stays unmounted
+  assert.equal(resolvePresencePhaseOnToggle('unmounted', false, false), 'unmounted');
+
+  // Reduced motion skips intermediate phases immediately
+  assert.equal(resolvePresencePhaseOnToggle('unmounted', true, true), 'entered');
+  assert.equal(resolvePresencePhaseOnToggle('entered', false, true), 'unmounted');
+});
+
+test('stepExponentialSmoothing is frame-rate invariant across 60Hz and 120Hz and snaps cleanly to target', () => {
+  // Two 8.335ms steps (120Hz) equal one 16.67ms step (60Hz) to floating-point precision
+  const one60Hz = stepExponentialSmoothing(100, 0, 16.67, 320, 0.01);
+  const step1_120Hz = stepExponentialSmoothing(100, 0, 8.335, 320, 0.01);
+  const two120Hz = stepExponentialSmoothing(step1_120Hz, 0, 8.335, 320, 0.01);
+  assert.equal(Math.abs(one60Hz - two120Hz) < 1e-9, true);
+
+  // Converges monotonically to target and snaps within snapEpsilon without oscillation
+  let pos = 120;
+  for (let i = 0; i < 200; i++) {
+    const next = stepExponentialSmoothing(pos, 0, 16.67, 90, 0.06);
+    assert.equal(next <= pos && next >= 0, true);
+    pos = next;
+  }
+  assert.equal(pos, 0);
+});
+
+test('computeSharedMorphTransform computes exact FLIP trajectories for Single <-> Split Morph including paused cover and mid-flight reversal', () => {
+  const headerArt = { left: 144, top: 10, width: 44, height: 44 };
+  const splitArtRest = { left: 144, top: 186, width: 356, height: 356 };
+
+  // 1. Single -> Split (artwork carrier rests at splitArtRest, travels from headerArt -> splitArtRest)
+  const toSplitArt = computeSharedMorphTransform(
+    splitArtRest,
+    headerArt,
+    splitArtRest,
+    'contain-uniform'
+  );
+  assert.notEqual(toSplitArt, null);
+  // Center of headerArt = (166, 32), center of splitArtRest = (322, 364) -> dx = -156, dy = -332, scale = 44/356 = 0.1236
+  assert.equal(toSplitArt?.fromTransform, 'translate3d(-156px, -332px, 0) scale(0.1236)');
+  assert.equal(toSplitArt?.toTransform, 'translate3d(0px, 0px, 0) scale(1)');
+
+  // 2. Split -> Single mid-flight reversal (captured mid-air at 180x180, travels smoothly up to 44x44 headerArt)
+  const midAirArt = { left: 144, top: 98, width: 180, height: 180 };
+  const reverseMidAir = computeSharedMorphTransform(
+    splitArtRest,
+    midAirArt,
+    headerArt,
+    'contain-uniform'
+  );
+  assert.notEqual(reverseMidAir, null);
+  assert.equal(reverseMidAir?.fromTransform, 'translate3d(-88px, -176px, 0) scale(0.5056)');
+  assert.equal(reverseMidAir?.toTransform, 'translate3d(-156px, -332px, 0) scale(0.1236)');
+
+  // 3. Track Title & Artist ('height-left' preserves uniform glyph aspect ratio anchored at left-center)
+  const headerMeta = { left: 200, top: 13, width: 190, height: 38 };
+  const splitMetaRest = { left: 144, top: 562, width: 312, height: 46 };
+  const metaMorph = computeSharedMorphTransform(
+    splitMetaRest,
+    headerMeta,
+    splitMetaRest,
+    'height-left'
+  );
+  assert.notEqual(metaMorph, null);
+  // dx0 = 200 - 144 = 56, dy0 = (13+19) - (562+23) = 32 - 585 = -553, uniform s0 = 38/46 = 0.8261
+  assert.equal(metaMorph?.fromTransform, 'translate3d(56px, -553px, 0) scale(0.8261)');
+  assert.equal(metaMorph?.toTransform, 'translate3d(0px, 0px, 0) scale(1)');
+
+  // 4. Progress Scrubber ('stretch-x-left' stretches horizontal bar width while exposing fromScaleX/toScaleX for circular dot guard)
+  const headerScrubber = { left: 450, top: 20, width: 480, height: 24 };
+  const splitScrubberRest = { left: 144, top: 624, width: 356, height: 16 };
+  const scrubMorph = computeSharedMorphTransform(
+    splitScrubberRest,
+    headerScrubber,
+    splitScrubberRest,
+    'stretch-x-left'
+  );
+  assert.notEqual(scrubMorph, null);
+  assert.equal(scrubMorph?.fromScaleX, 1.3483);
+  assert.equal(scrubMorph?.toScaleX, 1);
+  assert.equal(scrubMorph?.fromTransform, 'translate3d(306px, -600px, 0) scale(1.3483, 1)');
+
+  // 5. Horizontal lyrics stage glide, upgraded 720ms silky easing, & invalid zero-box guard
+  assert.equal(LAYOUT_MORPH_DURATION_MS >= 700, true);
+  assert.equal(LAYOUT_MORPH_EASING, 'cubic-bezier(0.22, 1, 0.36, 1)');
+  assert.equal(computeHorizontalStageFlipDx(144, 564), -420);
+  assert.equal(computeHorizontalStageFlipDx(564, 144), 420);
+  assert.equal(
+    computeSharedMorphTransform(splitArtRest, { left: 0, top: 0, width: 0, height: 0 }, headerArt, 'contain-uniform'),
+    null
+  );
+});
 
 
 

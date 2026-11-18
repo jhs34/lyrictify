@@ -254,6 +254,23 @@ export function MediaControls({
     return null;
   }
 
+  const renderPlayPauseMorph = (sizePx: number, playOffsetClass: string) => (
+    <span aria-hidden="true" className="play-pause-icon-slot">
+      <span
+        data-visible={isPlaying ? 'true' : 'false'}
+        className="play-pause-glyph flex items-center justify-center"
+      >
+        <Pause size={sizePx} fill="currentColor" strokeWidth={1.4} />
+      </span>
+      <span
+        data-visible={!isPlaying ? 'true' : 'false'}
+        className="play-pause-glyph flex items-center justify-center"
+      >
+        <Play size={sizePx} fill="currentColor" strokeWidth={1.4} className={playOffsetClass} />
+      </span>
+    </span>
+  );
+
   // Mobile Landscape Floating Bottom Transport Pill (active only on compact landscape viewports via CSS media query)
   if (variant === 'landscape-dock') {
     return (
@@ -272,7 +289,7 @@ export function MediaControls({
           tabIndex={effectiveInteractive ? 0 : -1}
           aria-label="이전 곡"
           title={isPreviewMode ? '미리보기에서는 이전 곡 이동을 지원하지 않습니다' : '이전 곡'}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.92] transition-[background-color,color,transform,opacity] duration-150 disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+          className="w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
         >
           <Rewind size={17} fill="currentColor" strokeWidth={1.4} />
         </button>
@@ -284,13 +301,9 @@ export function MediaControls({
           tabIndex={effectiveInteractive ? 0 : -1}
           aria-label={isPlaying ? '일시정지' : '재생'}
           title={isPlaying ? '일시정지 (Space)' : '재생 (Space)'}
-          className="w-10 h-9 rounded-full flex items-center justify-center text-white hover:bg-white/10 active:scale-[0.92] transition-[background-color,transform,opacity] duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+          className="w-10 h-9 rounded-full flex items-center justify-center text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
         >
-          {isPlaying ? (
-            <Pause size={20} fill="currentColor" strokeWidth={1.4} />
-          ) : (
-            <Play size={20} fill="currentColor" strokeWidth={1.4} className="translate-x-[1px]" />
-          )}
+          {renderPlayPauseMorph(20, 'translate-x-[1px]')}
         </button>
 
         <button
@@ -300,7 +313,7 @@ export function MediaControls({
           tabIndex={effectiveInteractive ? 0 : -1}
           aria-label="다음 곡"
           title={isPreviewMode ? '미리보기에서는 다음 곡 이동을 지원하지 않습니다' : '다음 곡'}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.92] transition-[background-color,color,transform,opacity] duration-150 disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+          className="w-9 h-9 rounded-full flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
         >
           <FastForward size={17} fill="currentColor" strokeWidth={1.4} />
         </button>
@@ -333,6 +346,7 @@ export function MediaControls({
     <div
       data-testid="media-progress-shell"
       data-idle-hidden={isIdleHidden ? 'true' : 'false'}
+      data-scrubbing={isPointerScrubbing ? 'true' : 'false'}
       className={`apple-scrubber-shell relative flex items-center select-none ${heightClass} ${
         isIdleHidden ? 'pointer-events-none' : ''
       }`}
@@ -389,7 +403,7 @@ export function MediaControls({
         data-idle-hidden={isIdleHidden ? 'true' : 'false'}
         className="hud-layer-pinned mt-4 w-full select-none"
       >
-        <div className="w-full">
+        <div data-morph-role="split-scrubber-group" className="w-full">
           {renderScrubberBar('w-full h-4')}
 
           <div
@@ -407,6 +421,7 @@ export function MediaControls({
         {/* Centered Pure Transport Controls (Previous · Play/Pause · Next) */}
         <div
           data-testid="split-transport-buttons"
+          data-morph-role="split-transport"
           aria-hidden={isIdleHidden}
           className={`transport-buttons-scalable mt-2.5 flex items-center justify-center gap-8 transition-opacity duration-300 ${
             isIdleHidden ? 'opacity-0 pointer-events-none' : 'opacity-100'
@@ -419,7 +434,7 @@ export function MediaControls({
             tabIndex={effectiveInteractive ? 0 : -1}
             aria-label="이전 곡"
             title={isPreviewMode ? '미리보기에서는 이전 곡 이동을 지원하지 않습니다' : '이전 곡'}
-            className="w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white active:scale-[0.92] transition-[color,transform,opacity] duration-150 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+            className="w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white active:scale-[0.93] transition-[color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
           >
             <Rewind size={25} fill="currentColor" strokeWidth={1.4} />
           </button>
@@ -432,13 +447,9 @@ export function MediaControls({
             tabIndex={effectiveInteractive ? 0 : -1}
             aria-label={isPlaying ? '일시정지' : '재생'}
             title={isPlaying ? '일시정지 (Space)' : '재생 (Space)'}
-            className="w-12 h-12 rounded-full flex items-center justify-center text-white hover:opacity-90 active:scale-[0.92] transition-[opacity,transform] duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+            className="w-12 h-12 rounded-full flex items-center justify-center text-white hover:opacity-90 active:scale-[0.93] transition-[opacity,transform] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
           >
-            {isPlaying ? (
-              <Pause size={30} fill="currentColor" strokeWidth={1.4} />
-            ) : (
-              <Play size={30} fill="currentColor" strokeWidth={1.4} className="translate-x-[1.5px]" />
-            )}
+            {renderPlayPauseMorph(30, 'translate-x-[1.5px]')}
           </button>
 
           <button
@@ -448,7 +459,7 @@ export function MediaControls({
             tabIndex={effectiveInteractive ? 0 : -1}
             aria-label="다음 곡"
             title={isPreviewMode ? '미리보기에서는 다음 곡 이동을 지원하지 않습니다' : '다음 곡'}
-            className="w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white active:scale-[0.92] transition-[color,transform,opacity] duration-150 disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+            className="w-11 h-11 rounded-full flex items-center justify-center text-white/90 hover:text-white active:scale-[0.93] transition-[color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-35 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
           >
             <FastForward size={25} fill="currentColor" strokeWidth={1.4} />
           </button>
@@ -466,7 +477,7 @@ export function MediaControls({
       className="hud-layer-pinned flex items-center w-full select-none"
     >
       {/* Horizontal Progress Bar (expands smoothly end-to-end when timestamps & buttons collapse with left/right fade) */}
-      <div className="flex items-center flex-1 min-w-0">
+      <div data-morph-role="header-player-group" className="flex items-center flex-1 min-w-0">
         <div
           data-testid="header-time-elapsed"
           data-idle-hidden={isIdleHidden ? 'true' : 'false'}
@@ -504,7 +515,10 @@ export function MediaControls({
         className="header-collapsible-x header-gap-transport header-inline-transport shrink-0"
       >
         <div className="header-collapsible-x-inner">
-          <div className="transport-buttons-scalable flex items-center gap-0.5 sm:gap-1 whitespace-nowrap">
+          <div
+            data-morph-role="header-transport"
+            className="transport-buttons-scalable flex items-center gap-0.5 sm:gap-1 whitespace-nowrap"
+          >
             <button
               type="button"
               onClick={onPrevious}
@@ -512,7 +526,7 @@ export function MediaControls({
               tabIndex={effectiveInteractive ? 0 : -1}
               aria-label="이전 곡"
               title={isPreviewMode ? '미리보기에서는 이전 곡 이동을 지원하지 않습니다' : '이전 곡'}
-              className="w-9 h-9 rounded-lg flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,color,transform,opacity] duration-150 disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
             >
               <Rewind size={16} fill="currentColor" strokeWidth={1.4} />
             </button>
@@ -525,13 +539,9 @@ export function MediaControls({
               tabIndex={effectiveInteractive ? 0 : -1}
               aria-label={isPlaying ? '일시정지' : '재생'}
               title={isPlaying ? '일시정지 (Space)' : '재생 (Space)'}
-              className="w-9 h-9 rounded-lg flex items-center justify-center text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,transform,opacity] duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-white hover:bg-white/10 active:scale-[0.94] transition-[background-color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
             >
-              {isPlaying ? (
-                <Pause size={18} fill="currentColor" strokeWidth={1.4} />
-              ) : (
-                <Play size={18} fill="currentColor" strokeWidth={1.4} className="translate-x-[1px]" />
-              )}
+              {renderPlayPauseMorph(18, 'translate-x-[1px]')}
             </button>
 
             <button
@@ -541,7 +551,7 @@ export function MediaControls({
               tabIndex={effectiveInteractive ? 0 : -1}
               aria-label="다음 곡"
               title={isPreviewMode ? '미리보기에서는 다음 곡 이동을 지원하지 않습니다' : '다음 곡'}
-              className="w-9 h-9 rounded-lg flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.93] transition-[background-color,color,transform,opacity] duration-150 disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-white/85 hover:text-white hover:bg-white/10 active:scale-[0.94] transition-[background-color,color,transform,opacity] duration-220 ease-[cubic-bezier(0.32,0.72,0,1)] disabled:opacity-30 disabled:pointer-events-none cursor-pointer focus-visible:outline-2 focus-visible:outline-white"
             >
               <FastForward size={16} fill="currentColor" strokeWidth={1.4} />
             </button>
