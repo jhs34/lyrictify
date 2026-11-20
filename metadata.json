@@ -1,6 +1,0 @@
-{
-  "name": "Lyrictify",
-  "description": "Apple Music 스타일의 실시간 Spotify 연동 가사 뷰어 웹 애플리케이션",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
