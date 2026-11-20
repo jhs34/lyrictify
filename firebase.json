@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "lyrictify-jhs",
+    "site": "jhs-lyrictify",
     "public": "dist",
     "ignore": [
       "firebase.json",
